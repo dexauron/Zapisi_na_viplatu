@@ -1,6 +1,10 @@
 (function () {
   const { SUPABASE_URL, SUPABASE_KEY } = window.APP_CONFIG;
-  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  // Страницы по ссылке (кабинет ТП, общий график) всегда работают как гость: даже если в этом браузере
+  // выполнен вход в приложение, сохранённая сессия сотрудника не должна подменять доступ по ссылке.
+  const sb = window.APP_ANON
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
+    : window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
   // ---------- форматирование ----------
   const money = new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', minimumFractionDigits: 2 });

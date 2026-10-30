@@ -58,30 +58,25 @@
     const { error } = await sb.auth.signInWithPassword({ email, password: $('l-pass').value });
     b.disabled = false;
     if (fail(error)) return;
+    try { localStorage.removeItem('sverka-cache'); } catch { /* */ }
     boot();
   });
 
   const withTimeout = (pr, ms) => Promise.race([pr, new Promise((_, no) => setTimeout(() => no(new Error('network timeout')), ms))]);
   async function boot() {
     $('boot').classList.remove('hidden');
-    // Без сети: сразу из сохранённых данных, не дожидаясь попыток связаться с сервером
-    if (!navigator.onLine && hasSavedSession() && cacheLoad() && st.me) { applyQueue(); return showApp(); }
+    // Мгновенный старт: показываем сохранённые данные, свежие подгружаются фоном
+    if (hasSavedSession() && cacheLoad() && st.me) {
+      applyQueue(); showApp();
+      if (navigator.onLine) refresh(true, false, true);
+      return;
+    }
+    // Первый запуск на этом устройстве
     let session = null;
-    try { ({ data: { session } } = await withTimeout(sb.auth.getSession(), 6000)); }
-    catch { if (hasSavedSession() && cacheLoad() && st.me) { applyQueue(); return showApp(); } }
+    try { ({ data: { session } } = await withTimeout(sb.auth.getSession(), 6000)); } catch { session = null; }
     if (!session) return showLogin();
-    let { data: me, error } = await sb.rpc('ensure_profile');
-    if (error && isNetErr(error)) {
-      try { me = JSON.parse(localStorage.getItem(CKEY) || 'null')?.me; error = null; } catch { me = null; }
-      if (!me) { $('boot').classList.add('hidden'); return A.toast('Нет сети. Для первого входа нужен интернет', true); }
-    }
-    if (error || !me || !me.active) {
-      await sb.auth.signOut();
-      A.toast(error ? humanError(error) : 'Нет доступа: учётная запись не активна', true);
-      return showLogin();
-    }
-    st.me = me;
-    await loadAll(); lastLoad = Date.now();
+    if (!(await loadAll())) return;
+    lastLoad = Date.now();
     showApp();
   }
   function hasSavedSession() { try { return Object.keys(localStorage).some((k) => /^sb-.*-auth-token$/.test(k)); } catch { return false; } }
@@ -100,28 +95,30 @@
     $('login').classList.remove('hidden');
   }
 
+  // Все данные одним запросом (RPC app_bootstrap). true — данные есть (с сервера или из кэша)
   async function loadAll() {
-    const q = [
-      sb.from('reps').select('*'),
-      sb.from('stores').select('*'),
-      sb.from('orders').select('*').order('order_date', { ascending: false }).order('created_at', { ascending: false }),
-      sb.from('staff').select('user_id, login, full_name, role, active'),
-    ];
-    if (isAdmin()) q.push(sb.from('payouts').select('*').order('payout_date', { ascending: false }).order('created_at', { ascending: false }),
-      sb.from('rep_access').select('*'));
-    if (!navigator.onLine && cacheLoad()) { applyQueue(); offlineBar(); return; }
+    if (!navigator.onLine && cacheLoad()) { applyQueue(); offlineBar(); return true; }
     if (queue.length) await flush();
-    let res;
-    try { res = await Promise.all(q); } catch (e) { res = [{ error: e }]; }
-    const err = res.find((r) => r.error)?.error;
-    if (err) {
-      if (isNetErr(err) && cacheLoad()) { applyQueue(); offlineBar(); return; }
-      fail(err); return;
+    let r;
+    try { r = await sb.rpc('app_bootstrap'); } catch (e) { r = { error: e }; }
+    if (r.error) {
+      if (isNetErr(r.error) && cacheLoad()) { applyQueue(); offlineBar(); return true; }
+      if (/JWT|token|401|PGRST30/i.test(r.error.message + (r.error.code || ''))) { await signOutClean('Сессия истекла — войдите снова'); return false; }
+      fail(r.error); return !!st.me;
     }
-    st.reps = sortRu(res[0].data, 'full_name'); st.stores = sortRu(res[1].data, 'name');
-    st.orders = res[2].data; st.staff = sortRu(res[3].data, 'full_name');
-    st.payouts = res[4]?.data || []; st.access = res[5]?.data || [];
+    const d = r.data || {};
+    if (!d.me || !d.me.active) { await signOutClean('Нет доступа: учётная запись не активна'); return false; }
+    st.me = d.me;
+    st.reps = sortRu(d.reps || [], 'full_name'); st.stores = sortRu(d.stores || [], 'name');
+    st.orders = d.orders || []; st.staff = sortRu(d.staff || [], 'full_name');
+    st.payouts = d.payouts || []; st.access = d.access || [];
     applyQueue(); cacheSave(); offlineBar();
+    return true;
+  }
+  async function signOutClean(msg) {
+    try { localStorage.removeItem(CKEY); } catch { /* */ }
+    st.me = null; await sb.auth.signOut().catch(() => {});
+    A.toast(msg, true); showLogin();
   }
   const ordView = (o) => A.orderView({ status: o.status, expected: o.expected_date });
 
@@ -424,22 +421,41 @@
     frame('Представители', null, 'dir', 'Имя, компания, телефон');
     render.body = renderDirBody; renderDirBody();
   }
+  // Список представителей: первые 60 сразу, остальные порциями при прокрутке — быстро даже при тысяче строк
   function renderDirBody() {
-    const q = st.q.dir; let html = '';
+    const q = st.q.dir;
     const rows = st.reps.filter((r) => A.matches(q, r.full_name, r.company, r.phone));
-    const groups = A.groupBy(rows, (r) => (r.active ? 'Активные' : 'Отключённые'));
-    for (const g of ['Активные', 'Отключённые']) if (groups.has(g)) {
-      html += `<div class="section-h"><span>${g}</span></div><div class="list">` + groups.get(g).map((r) => {
-        const wait = st.orders.filter((o) => o.rep_id === r.id && o.status === 'ordered');
-        return `<button class="cell" data-rep="${r.id}"><div class="avatar">${E(A.initials(r.full_name))}</div>
-          <div class="main"><div class="t"><b>${E(r.full_name)}</b></div><div class="s">${E([r.company, r.phone].filter(Boolean).join(' · ') || 'Торговый представитель')}</div></div>
-          ${wait.length ? `<div class="r"><span class="pill c-blue">ждём ${wait.length}</span></div>` : ''}</button>`;
-      }).join('') + '</div>';
+    if (!rows.length) { setBody(A.emptyState(q ? 'Ничего не найдено' : 'Представителей нет', q ? '' : 'Нажмите «+», чтобы добавить')); return; }
+    const waiting = new Map();
+    for (const o of st.orders) if (o.status === 'ordered') waiting.set(o.rep_id, (waiting.get(o.rep_id) || 0) + 1);
+    const cell = (r) => { const n = waiting.get(r.id) || 0;
+      return `<button class="cell" data-rep="${r.id}"><div class="avatar">${E(A.initials(r.full_name))}</div>
+        <div class="main"><div class="t"><b>${E(r.full_name)}</b></div><div class="s">${E([r.company, r.phone].filter(Boolean).join(' · ') || 'Торговый представитель')}</div></div>
+        ${n ? `<div class="r"><span class="pill c-blue">ждём ${n}</span></div>` : ''}</button>`; };
+    const groups = [['Активные', rows.filter((r) => r.active)], ['Отключённые', rows.filter((r) => !r.active)]].filter(([, g]) => g.length);
+    setBody(groups.map(([g, list], i) => `<div class="section-h"><span>${g} · ${list.length}</span></div><div class="list" data-g="${i}"></div>`).join('') + '<div id="more-sentinel" style="height:1px"></div>');
+    const boxes = groups.map(([, list], i) => ({ el: $('body').querySelector(`[data-g="${i}"]`), list, shown: 0 }));
+    const step = (n) => {
+      for (const b of boxes) {
+        if (b.shown >= b.list.length) continue;
+        const next = b.list.slice(b.shown, b.shown + n); b.shown += next.length;
+        b.el.insertAdjacentHTML('beforeend', next.map(cell).join('')); n -= next.length;
+        if (n <= 0) return true;
+      }
+      return boxes.some((b) => b.shown < b.list.length);
+    };
+    step(60);
+    const sentinel = $('more-sentinel');
+    if (boxes.some((b) => b.shown < b.list.length) && 'IntersectionObserver' in window) {
+      const io = new IntersectionObserver((en) => { if (en[0].isIntersecting && !step(150)) io.disconnect(); }, { rootMargin: '800px' });
+      io.observe(sentinel);
+    } else while (step(500)) { /* старые браузеры: всё сразу */ }
+    if (!renderDirBody.bound) {
+      renderDirBody.bound = true;
+      $('page').addEventListener('click', (e) => { const c = e.target.closest('[data-rep]'); if (c && st.tab === 'dir') repDetail(c.dataset.rep); });
     }
-    if (!rows.length) html = A.emptyState(q ? 'Ничего не найдено' : 'Представителей нет', q ? '' : 'Нажмите «+», чтобы добавить');
-    setBody(html);
-    $('body').querySelectorAll('[data-rep]').forEach((c) => c.addEventListener('click', () => repDetail(c.dataset.rep)));
   }
+
 
   const repLink = (rep) => { const t = st.access.find((a) => a.rep_id === rep.id)?.token; return t ? new URL('index.html', location.href).href.split('#')[0] + '#' + t : null; };
   const newToken = () => Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -637,6 +653,8 @@
   // ЗАПИСЬ ДАННЫХ: работа без сети, кэш, отмена действия
   // =====================================================================
   const QKEY = 'sverka-queue', CKEY = 'sverka-cache';
+  // crypto.randomUUID нет в старых iOS/Android — запасной вариант на getRandomValues
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))).toString(16)));
   const isNetErr = (e) => !navigator.onLine || /Failed to fetch|NetworkError|Load failed|network|fetch/i.test(e?.message || String(e || ''));
   let queue = []; try { queue = JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch { queue = []; }
   const saveQueue = () => { try { localStorage.setItem(QKEY, JSON.stringify(queue)); } catch { /* переполнено */ } offlineBar(); };
@@ -670,7 +688,7 @@
   }
   // Записать: сразу на сервер; без сети — в очередь, отправится сама
   async function write(table, op, id, row = {}) {
-    const w = { table, op, id: id || crypto.randomUUID(), row };
+    const w = { table, op, id: id || uuid(), row };
     if (queue.length) await flush();
     if (!queue.length) {
       try {
@@ -946,7 +964,7 @@
   function ics(title, date, desc) {
     const d = date.replace(/-/g, ''), stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
     const esc = (x) => String(x).replace(/[\\,;]/g, (c) => '\\' + c).replace(/\n/g, '\\n');
-    const body = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Sverka//RU', 'BEGIN:VEVENT', `UID:${crypto.randomUUID()}@sverka`, `DTSTAMP:${stamp}`,
+    const body = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Sverka//RU', 'BEGIN:VEVENT', `UID:${uuid()}@sverka`, `DTSTAMP:${stamp}`,
       `DTSTART:${d}T090000`, `DTEND:${d}T091500`, `SUMMARY:${esc(title)}`, `DESCRIPTION:${esc(desc)}`, `URL:${location.href.split('#')[0]}`,
       'BEGIN:VALARM', 'TRIGGER:-PT0M', 'ACTION:DISPLAY', `DESCRIPTION:${esc(title)}`, 'END:VALARM', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
     const a = document.createElement('a');
@@ -1079,13 +1097,16 @@
 
   // ---------- автообновление: данные меняют несколько сотрудников с разных устройств ----------
   let lastLoad = 0, refreshing = false;
-  async function refresh(force = false, byUser = false) {
+  async function refresh(force = false, byUser = false, quiet = false) {
     if (!st.me || refreshing || document.hidden) return;
     if (!force && Date.now() - lastLoad < 15000) return;
     if (document.querySelector('.sheet')) return;                       // открыта форма — не мешаем
     if (!byUser && document.activeElement?.matches('input, textarea, select')) return; // идёт ввод
     refreshing = true;
-    try { await loadAll(); lastLoad = Date.now(); render(); if (byUser) A.toast('Обновлено'); } finally { refreshing = false; }
+    const y = window.scrollY;
+    try {
+      if (await loadAll()) { lastLoad = Date.now(); if (st.me && !document.querySelector('.sheet')) { render(); window.scrollTo(0, y); } if (byUser) A.toast('Обновлено'); }
+    } finally { refreshing = false; }
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   window.addEventListener('focus', () => refresh());

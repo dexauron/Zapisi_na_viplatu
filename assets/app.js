@@ -114,7 +114,8 @@
   $('tabs').addEventListener('click', (e) => {
     const t = e.target.closest('button')?.dataset.tab; if (!t) return;
     if (t === st.tab) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
-    st.tab = t; renderTabs(); render(); window.scrollTo(0, 0);
+    A.haptic(); st.tab = t; render(); window.scrollTo(0, 0);
+    $('page').classList.remove('enter'); void $('page').offsetWidth; $('page').classList.add('enter');
   });
   A.navScroll($('nav'));
   $('nav-plus').addEventListener('click', () => {
@@ -625,6 +626,30 @@
     $('logout').addEventListener('click', async () => { await sb.auth.signOut(); st.me = null; showLogin(); });
   }
 
+  // ---------- быстрые действия свайпом по строке ----------
+  async function quickStatus(table, id, status, msg) {
+    const list = table === 'orders' ? st.orders : st.payouts;
+    const row = list.find((x) => x.id === id); if (!row) return;
+    const { data, error } = await sb.from(table).update({ status }).eq('id', id).select().single();
+    if (fail(error)) return;
+    Object.assign(row, data); A.toast(msg); render.body ? render.body() : render(); renderTabs();
+  }
+  function swipeActions(cell) {
+    if (cell.dataset.id) {
+      const o = st.orders.find((x) => x.id === cell.dataset.id);
+      if (!o || o.status !== 'ordered') return o ? [{ label: 'Ожидается', color: 'blue', run: () => quickStatus('orders', o.id, 'ordered', 'Заказ снова ожидается') }] : [];
+      return [{ label: 'Пришёл', color: 'green', run: () => quickStatus('orders', o.id, 'delivered', 'Отмечено: пришёл') },
+        { label: 'Отменить', color: 'red', run: () => quickStatus('orders', o.id, 'cancelled', 'Заказ отменён') }];
+    }
+    const p = st.payouts.find((x) => x.id === cell.dataset.pay);
+    if (!p || !isAdmin()) return [];
+    if (p.status === 'paid') return [{ label: 'Не выплачено', color: 'gray', run: () => quickStatus('payouts', p.id, 'to_pay', 'Статус: К выплате') }];
+    return [{ label: 'Выплачено', color: 'green', run: () => quickStatus('payouts', p.id, 'paid', 'Статус: Выплачено') },
+      ...(p.status === 'accrued' ? [{ label: 'К выплате', color: 'blue', run: () => quickStatus('payouts', p.id, 'to_pay', 'Статус: К выплате') }] : [])];
+  }
+  A.swipeRows($('page'), swipeActions);
+  A.pullToRefresh(() => refresh(true, true));
+
   // =====================================================================
   // СЕГОДНЯ и КАЛЕНДАРЬ
   // =====================================================================
@@ -709,7 +734,8 @@
         <div class="cal-legend"><span><i style="background:var(--blue)"></i>придёт заказ</span>${isAdmin() ? '<span><i style="background:var(--gray)"></i>выплата</span>' : ''}<span><i style="background:var(--green)"></i>готово</span><span><i style="background:var(--red)"></i>просрочено</span></div>
       </div>
       <div class="section-h" style="margin-top:20px"><span>${E(weekday(d))}</span>${d !== t ? '<button class="link-btn" data-m="0">Сегодня</button>' : ''}</div>${list}`);
-    $('body').querySelectorAll('[data-d]').forEach((b) => b.addEventListener('click', () => { st.cal.day = b.dataset.d; renderCalendar(); }));
+    $('body').querySelectorAll('[data-d]').forEach((b) => b.addEventListener('click', () => { A.haptic(); st.cal.day = b.dataset.d; renderCalendar(); }));
+    A.swipeX($('body').querySelector('.cal'), () => $('body').querySelector('[data-m="1"]').click(), () => $('body').querySelector('[data-m="-1"]').click());
     $('body').querySelectorAll('[data-m]').forEach((b) => b.addEventListener('click', () => {
       const k = +b.dataset.m;
       if (!k) { st.cal = { ym: t.slice(0, 7), day: t }; return renderCalendar(); }
@@ -925,13 +951,13 @@
 
   // ---------- автообновление: данные меняют несколько сотрудников с разных устройств ----------
   let lastLoad = 0, refreshing = false;
-  async function refresh(force = false) {
+  async function refresh(force = false, byUser = false) {
     if (!st.me || refreshing || document.hidden) return;
     if (!force && Date.now() - lastLoad < 15000) return;
     if (document.querySelector('.sheet')) return;                       // открыта форма — не мешаем
-    if (document.activeElement?.matches('input, textarea, select')) return; // идёт ввод
+    if (!byUser && document.activeElement?.matches('input, textarea, select')) return; // идёт ввод
     refreshing = true;
-    try { await loadAll(); lastLoad = Date.now(); render(); } finally { refreshing = false; }
+    try { await loadAll(); lastLoad = Date.now(); render(); if (byUser) A.toast('Обновлено'); } finally { refreshing = false; }
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   window.addEventListener('focus', () => refresh());

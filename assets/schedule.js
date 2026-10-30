@@ -69,4 +69,6 @@
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && Date.now() - shownAt > 60000 && !document.querySelector('.sheet')) location.reload();
   });
+
+  A.pullToRefresh(() => location.reload());
 })();

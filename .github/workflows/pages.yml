@@ -37,6 +37,10 @@ jobs:
           mkdir _site
           cp -r index.html app.html list.html admin.html manifest.webmanifest assets vendor .nojekyll _site/
           rm -f _site/assets/config.example.js
+          # новая версия файлов при каждой выкладке — браузер не возьмёт старый CSS/JS из кэша
+          v="${GITHUB_SHA::8}"
+          sed -i -E "s#(src|href)=\"(assets/[^\"?]+|vendor/[^\"?]+|manifest\.webmanifest)\"#\1=\"\2?v=$v\"#g" _site/*.html
+          sed -i "s#vendor/xlsx.core.min.js'#vendor/xlsx.core.min.js?v=$v'#" _site/assets/app.js
           printf "window.APP_CONFIG = {\n  SUPABASE_URL: '%s',\n  SUPABASE_KEY: '%s',\n};\n" "$SUPABASE_URL" "$SUPABASE_PUBLISHABLE_KEY" > _site/assets/config.js
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0

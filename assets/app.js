@@ -374,7 +374,7 @@
       body: `<div class="section-h"><span>Кому</span></div><div class="list">${repPicker(p?.rep_id || preset.rep_id)}${storePicker(p?.store_id)}</div>
         <div class="section-h"><span>Выплата</span></div><div class="list">
           ${field('Сумма, ₽', `<input name="amount" inputmode="decimal" placeholder="0,00" value="${p ? String(p.amount).replace('.', ',') : ''}">`)}
-          ${field('Дата', `<input name="payout_date" type="date" value="${p?.payout_date || A.today()}">`)}
+          ${field('Дата выплаты', `<input name="payout_date" type="date" value="${p?.payout_date || A.today()}">`)}
           ${field('Статус', `<select name="status">${Object.entries(A.PAY).map(([k, v]) => `<option value="${k}" ${k === (p?.status || 'accrued') ? 'selected' : ''}>${v.label}</option>`).join('')}</select>`)}
           ${field('Основание', `<input name="basis" placeholder="накладная, бонус, акция" value="${E(p?.basis || '')}">`)}
         </div>
@@ -544,6 +544,12 @@
         <div class="section-h"><span>${st.stores.length > 1 ? 'Магазины' : 'Магазин'}</span></div><div class="list">`
         + st.stores.map((s) => `<button class="cell" data-store="${s.id}"><div class="main"><div class="t">${E(s.name)}</div>${s.address ? `<div class="s">${E(s.address)}</div>` : ''}</div></button>`).join('')
         + `<button class="cell action" data-act-store>＋ Добавить магазин</button></div>
+        <div class="section-h"><span>Общая ссылка для представителей</span></div><div class="list">
+          <button class="cell action" data-shared="copy">Скопировать ссылку</button>
+          <button class="cell action" data-shared="wa">Отправить в WhatsApp</button>
+          <button class="cell action" data-shared="open">Открыть</button>
+          <button class="cell action" data-shared="reset">Выдать новую ссылку</button></div>
+        <div class="footer-note">Одна ссылка для всех: кто и на какое число записан на выплату. Выплаченные не видны. Новая ссылка отключает старую.</div>
         <div class="section-h"><span>Справочник представителей</span></div><div class="list">
           <button class="cell action" data-act-import>Обновить из файла 1С</button></div>
         <div class="footer-note">Выгрузка справочника «Контрагенты» (.xls, .xlsx). Новые добавятся, изменённые обновятся, ссылки сохранятся.</div>`;
@@ -560,9 +566,24 @@
     $('body').querySelectorAll('[data-store]').forEach((c) => c.addEventListener('click', () => storeForm(storeById(c.dataset.store))));
     $('body').querySelector('[data-act-store]')?.addEventListener('click', () => storeForm());
     $('body').querySelector('[data-act-import]')?.addEventListener('click', () => importReps());
+    $('body').querySelectorAll('[data-shared]').forEach((c) => c.addEventListener('click', () => sharedLink(c.dataset.shared)));
     $('body').querySelectorAll('[data-staff]').forEach((c) => c.addEventListener('click', () => staffForm(st.staff.find((s) => s.user_id === c.dataset.staff))));
     $('body').querySelector('[data-act-add]')?.addEventListener('click', () => staffForm());
     $('logout').addEventListener('click', async () => { await sb.auth.signOut(); st.me = null; showLogin(); });
+  }
+
+  // ---------- общая ссылка: график записей на выплату для всех ТП ----------
+  async function sharedLink(act) {
+    if (act === 'reset' && !(await confirmAct('Старая общая ссылка перестанет работать. Выдать новую?'))) return;
+    const { data: token, error } = await sb.rpc('shared_link_token', { p_reset: act === 'reset' });
+    if (fail(error)) return;
+    const url = new URL('list.html', location.href).href.split('#')[0] + '#' + token;
+    if (act === 'open') window.open(url, '_blank', 'noopener');
+    else if (act === 'wa') window.open(`https://wa.me/?text=${encodeURIComponent('Записи на выплату: ' + url)}`, '_blank', 'noopener');
+    else {
+      try { await navigator.clipboard.writeText(url); A.toast(act === 'reset' ? 'Новая ссылка скопирована' : 'Ссылка скопирована'); }
+      catch { window.prompt('Скопируйте ссылку', url); }
+    }
   }
 
   // ---------- загрузка справочника представителей из 1С ----------

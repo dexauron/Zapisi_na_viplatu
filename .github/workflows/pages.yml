@@ -35,7 +35,7 @@ jobs:
           case "$SUPABASE_URL" in https://*.supabase.co) ;; *) echo "::error::SUPABASE_URL должен быть https://<ref>.supabase.co"; exit 1;; esac
           case "$SUPABASE_PUBLISHABLE_KEY" in sb_publishable_*) ;; *) echo "::error::Нужен публичный ключ sb_publishable_…, не секретный"; exit 1;; esac
           mkdir _site
-          cp -r index.html app.html admin.html manifest.webmanifest assets vendor .nojekyll _site/
+          cp -r index.html app.html list.html admin.html manifest.webmanifest assets vendor .nojekyll _site/
           rm -f _site/assets/config.example.js
           printf "window.APP_CONFIG = {\n  SUPABASE_URL: '%s',\n  SUPABASE_KEY: '%s',\n};\n" "$SUPABASE_URL" "$SUPABASE_PUBLISHABLE_KEY" > _site/assets/config.js
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0

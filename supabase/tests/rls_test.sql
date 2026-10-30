@@ -10,7 +10,7 @@ do $test$
 declare
   adm uuid := gen_random_uuid(); emp uuid := gen_random_uuid(); off uuid := gen_random_uuid();
   stranger uuid := gen_random_uuid(); owner uuid := gen_random_uuid();
-  rep uuid; rep2 uuid; store uuid; ord uuid; tok text; n int; j json; v text; log text[] := '{}';
+  rep uuid; rep2 uuid; store uuid; ord uuid; tok text; stok text; n int; j json; v text; log text[] := '{}';
 begin
   -- Данные (от имени владельца базы, RLS не действует)
   insert into auth.users (id, instance_id, aud, role, email, created_at, updated_at)
@@ -28,6 +28,7 @@ begin
   insert into public.orders (rep_id, store_id, amount, created_by) values (rep, store, 100.50, adm) returning id into ord;
   insert into public.orders (rep_id, amount, created_by) values (rep2, 7, adm);
   insert into public.payouts (rep_id, amount, status) values (rep, 300, 'to_pay'), (rep2, 1, 'accrued');
+  select token into stok from private.shared_link;
   log := log || pg_temp.chk('01 token created by trigger len', (coalesce(length(tok), 0))::text, '36');
 
   -- Аноним (ссылка торгового представителя)
@@ -45,6 +46,12 @@ begin
   exception when others then log := log || ('08 ok anon insert denied: ' || sqlerrm); end;
   begin perform public.import_reps('[{"key":"x","full_name":"x"}]'::jsonb); log := log || '08b FAIL anon imported reps'::text;
   exception when others then log := log || ('08b ok anon import denied: ' || sqlerrm); end;
+  j := public.get_payout_schedule(repeat('0', 36)); log := log || pg_temp.chk('08c schedule wrong token', j::text, null);
+  j := public.get_payout_schedule(stok);
+  select count(*) into n from json_array_elements(j) e where (e ->> 'rep_id')::uuid = any(array[rep, rep2]);
+  log := log || pg_temp.chk('08d schedule shows unpaid', n::text, '2');
+  select count(*) into n from json_array_elements(j) e where e::jsonb ? 'phone' or e::jsonb ? 'comment';
+  log := log || pg_temp.chk('08e schedule hides phone/comment', n::text, '0');
 
   -- Сотрудник
   perform set_config('role', 'authenticated', true);
@@ -73,6 +80,8 @@ begin
 
   begin perform public.import_reps('[{"key":"x","full_name":"x"}]'::jsonb); log := log || '22b FAIL employee imported reps'::text;
   exception when others then log := log || ('22b ok employee import denied: ' || sqlerrm); end;
+  begin perform public.shared_link_token(); log := log || '22c FAIL employee read shared link'::text;
+  exception when others then log := log || ('22c ok employee shared link denied: ' || sqlerrm); end;
 
   -- Отключённый сотрудник и посторонний вошедший
   perform set_config('request.jwt.claims', json_build_object('sub', off, 'role', 'authenticated')::text, true);
@@ -108,6 +117,11 @@ begin
   log := log || pg_temp.chk('34 reimport same/deactivated', (j ->> 'same') || '/' || (j ->> 'deactivated'), '1/1');
   select active::text into v from public.reps where id = rep2; log := log || pg_temp.chk('35 missing rep disabled', v, 'false');
   select active::text into v from public.reps where id = rep; log := log || pg_temp.chk('36 manual rep untouched', v, 'true');
+
+  log := log || pg_temp.chk('37 admin shared link token', (public.shared_link_token() = stok)::text, 'true');
+  j := public.get_payout_schedule(stok);
+  select count(*) into n from json_array_elements(j) e where (e ->> 'rep_id')::uuid = rep;
+  log := log || pg_temp.chk('38 paid hidden from schedule', n::text, '0');
 
   raise exception E'РЕЗУЛЬТАТ\n%', array_to_string(log, E'\n');
 end

@@ -29,13 +29,13 @@ jobs:
         run: for f in assets/*.js; do node --check "$f"; done
       - name: Все подключённые файлы существуют, ключей в коде нет
         run: |
-          for page in index.html app.html; do
+          for page in index.html app.html list.html; do
             grep -oE '(src|href)="[^":#]+"' "$page" | cut -d'"' -f2 | while read -r f; do
               [ "$f" = "assets/config.js" ] && continue
               [ -e "$f" ] || { echo "::error::$page ссылается на отсутствующий $f"; exit 1; }
             done
           done
-          if grep -rnE 'sb_publishable_[A-Za-z0-9_-]{10,}|sb_secret_|service_role' assets/*.js index.html app.html; then
+          if grep -rnE 'sb_publishable_[A-Za-z0-9_-]{10,}|sb_secret_|service_role' assets/*.js index.html app.html list.html; then
             echo "::error::Ключ Supabase в коде интерфейса — он должен приходить из переменных GitHub"; exit 1
           fi
 

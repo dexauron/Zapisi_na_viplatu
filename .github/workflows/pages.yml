@@ -35,7 +35,7 @@ jobs:
           case "$SUPABASE_URL" in https://*.supabase.co) ;; *) echo "::error::SUPABASE_URL должен быть https://<ref>.supabase.co"; exit 1;; esac
           case "$SUPABASE_PUBLISHABLE_KEY" in sb_publishable_*) ;; *) echo "::error::Нужен публичный ключ sb_publishable_…, не секретный"; exit 1;; esac
           mkdir _site
-          cp -r index.html app.html list.html admin.html manifest.webmanifest assets vendor .nojekyll _site/
+          cp -r index.html app.html list.html admin.html sw.js manifest.webmanifest assets vendor .nojekyll _site/
           rm -f _site/assets/config.example.js
           # новая версия файлов при каждой выкладке — браузер не возьмёт старый CSS/JS из кэша
           v="${GITHUB_SHA::8}"

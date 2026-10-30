@@ -239,3 +239,17 @@ body { -webkit-user-select: none; user-select: none; overscroll-behavior-y: none
 .ptr.spin { opacity: 1; transition: transform .2s; } .ptr.spin .ptr-spin { animation: spin .7s linear infinite; border-top-color: var(--blue); }
 .sheet { touch-action: pan-y; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* Отмена действия в уведомлении */
+.toast.has-action { display: flex; align-items: center; gap: 14px; padding: 8px 8px 8px 18px; pointer-events: auto; }
+.toast button { border: 0; background: var(--fill); color: var(--blue); font-weight: 600; font-size: 15px; padding: 7px 14px; border-radius: 999px; cursor: pointer; }
+/* Нет сети */
+.offline-bar { position: fixed; left: 50%; bottom: calc(64px + var(--safe-b)); transform: translate(-50%, 20px); z-index: 25; opacity: 0; pointer-events: none;
+  background: #3a3a3c; color: #fff; font-size: 13px; font-weight: 500; padding: 7px 14px; border-radius: 999px; transition: .25s; max-width: 92vw; text-align: center; }
+.offline-bar.show { opacity: .95; transform: translate(-50%, 0); }
+@media (min-width: 900px) { body.app-on .offline-bar { left: calc(50% + 116px); bottom: 20px; } }
+.pending { color: var(--orange); font-weight: 600; }
+/* Крупнее переключатели: высота 44 pt по рекомендации Apple */
+.segmented { padding: 3px; border-radius: 11px; }
+.segmented button { min-height: 38px; font-size: 14px; border-radius: 8px; }
+.search .clear { width: 28px; height: 28px; top: 4px; right: 4px; line-height: 28px; background-clip: content-box; padding: 4px; }

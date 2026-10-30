@@ -83,5 +83,14 @@ Deno.serve(async (req) => {
     return json({ staff: row });
   }
 
+  if (body.action === "delete") {
+    const id = String(body.user_id ?? "");
+    if (!id || id === user.id) return json({ error: "Нельзя удалить самого себя" }, 400);
+    // записи сотрудника остаются: в заказах автор станет пустым, история изменений сохранится
+    const { error } = await service.auth.admin.deleteUser(id);
+    if (error) return json({ error: error.message }, 400);
+    return json({ deleted: id });
+  }
+
   return json({ error: "Неизвестное действие" }, 400);
 });

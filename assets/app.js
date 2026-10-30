@@ -65,7 +65,11 @@
     $('boot').classList.remove('hidden');
     const { data: { session } } = await sb.auth.getSession();
     if (!session) return showLogin();
-    const { data: me, error } = await sb.rpc('ensure_profile');
+    let { data: me, error } = await sb.rpc('ensure_profile');
+    if (error && isNetErr(error)) {
+      try { me = JSON.parse(localStorage.getItem(CKEY) || 'null')?.me; error = null; } catch { me = null; }
+      if (!me) { $('boot').classList.add('hidden'); return A.toast('Нет сети. Для первого входа нужен интернет', true); }
+    }
     if (error || !me || !me.active) {
       await sb.auth.signOut();
       A.toast(error ? humanError(error) : 'Нет доступа: учётная запись не активна', true);
@@ -96,11 +100,18 @@
     ];
     if (isAdmin()) q.push(sb.from('payouts').select('*').order('payout_date', { ascending: false }).order('created_at', { ascending: false }),
       sb.from('rep_access').select('*'));
-    const res = await Promise.all(q);
-    for (const r of res) if (fail(r.error)) return;
+    if (queue.length) await flush();
+    let res;
+    try { res = await Promise.all(q); } catch (e) { res = [{ error: e }]; }
+    const err = res.find((r) => r.error)?.error;
+    if (err) {
+      if (isNetErr(err) && cacheLoad()) { applyQueue(); offlineBar(); return; }
+      fail(err); return;
+    }
     st.reps = sortRu(res[0].data, 'full_name'); st.stores = sortRu(res[1].data, 'name');
     st.orders = res[2].data; st.staff = sortRu(res[3].data, 'full_name');
     st.payouts = res[4]?.data || []; st.access = res[5]?.data || [];
+    applyQueue(); cacheSave(); offlineBar();
   }
   const ordView = (o) => A.orderView({ status: o.status, expected: o.expected_date });
 
@@ -188,7 +199,7 @@
     const r = repById(o.rep_id), v = ordView(o);
     const when = A.orderWhen({ status: o.status, expected: o.expected_date, delivered_at: o.delivered_at });
     return `<button class="cell" data-id="${o.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
-      <div class="s">${E(when)}</div></div><div class="r"><div class="amt">${A.fmtMoney(o.amount)}</div>${A.pill(v)}</div></button>`;
+      <div class="s">${o._pending ? '<span class="pending">● не отправлено</span> ' : ''}${E(when)}</div></div><div class="r"><div class="amt">${A.fmtMoney(o.amount)}</div>${A.pill(v)}</div></button>`;
   }
 
   function orderDetail(id) {
@@ -210,23 +221,14 @@
       ${acts.join('')}
       <div class="section-h"><span>История</span></div><div id="hist">${info([['Записал', `${staffName(o.created_by) || '—'}, ${A.fmtDate(o.created_at)}`]])}</div>` });
     loadHistory({ entity_id: id }, api.body.querySelector('#hist'));
-    const setStatus = async (status, msg) => {
-      api.busy(true);
-      const { data, error } = await sb.from('orders').update({ status }).eq('id', id).select().single();
-      api.busy(false); if (fail(error)) return;
-      Object.assign(o, data); api.close(); A.toast(msg); render.body();
-    };
+    const setStatus = (status, msg) => { api.close(); changeStatus('orders', id, status, msg); };
     onActs(api, {
       arrived: () => setStatus('delivered', 'Отмечено: пришёл'),
-      cancel: async () => { if (await confirmAct('Отменить заказ?')) setStatus('cancelled', 'Заказ отменён'); },
+      cancel: () => setStatus('cancelled', 'Заказ отменён'),
       reopen: () => setStatus('ordered', 'Заказ снова ожидается'),
       remind: () => ics(`Заказ: ${r?.full_name || ''}`, o.expected_date, `Должен прийти заказ на ${A.fmtMoney(o.amount)}${o.order_no ? ', № ' + o.order_no : ''}.`),
       edit: () => orderForm(o),
-      delete: async () => {
-        if (!(await confirmAct('Удалить заказ без возможности восстановления?'))) return;
-        const { error } = await sb.from('orders').delete().eq('id', id); if (fail(error)) return;
-        st.orders = st.orders.filter((x) => x.id !== id); api.close(); A.toast('Удалено'); render.body();
-      },
+      delete: () => { api.close(); deleteWithUndo('orders', id, 'Заказ удалён'); },
     });
   }
 
@@ -256,6 +258,7 @@
     const val = (n) => f.querySelector(`[name=${n}]`)?.value.trim();
     let rep_id = val('rep_id'), store_id = val('store_id') || null;
     if (!rep_id) throw new Error('Выберите представителя');
+    if ((rep_id === NEW || store_id === NEW) && !navigator.onLine) throw new Error('Новый представитель или магазин добавляется только при наличии сети');
     if (rep_id === NEW) {
       if (!val('new_rep_name')) throw new Error('Укажите ФИО нового представителя');
       const { data, error } = await sb.from('reps').insert({ full_name: val('new_rep_name'), company: val('new_rep_company') || null, phone: val('new_rep_phone') || null }).select().single();
@@ -314,12 +317,10 @@
       try {
         const p = await resolvePickers(f);
         const row = { ...p, amount, order_no: v('order_no') || null, order_date: v('order_date'), expected_date: v('expected_date') || null, comment: v('comment') || null };
-        const q = o ? sb.from('orders').update(row).eq('id', o.id) : sb.from('orders').insert(row);
-        const { data, error } = await q.select().single(); if (error) throw error;
-        if (o) Object.assign(o, data); else st.orders.unshift(data);
-        st.orders.sort((a, b) => b.order_date.localeCompare(a.order_date) || b.created_at.localeCompare(a.created_at));
+        const r = await write('orders', o ? 'update' : 'insert', o?.id, row);
+        st.orders.sort((a, b) => b.order_date.localeCompare(a.order_date) || (b.created_at || '').localeCompare(a.created_at || ''));
         if (row.store_id) localStorage.setItem('lastStore', row.store_id);
-        api.close(); A.toast(o ? 'Сохранено' : 'Заказ записан');
+        api.close(); A.toast((o ? 'Сохранено' : 'Заказ записан') + (r.offline ? ' · отправится при появлении сети' : ''));
         if (st.tab === 'orders') render.body(); else render();
       } catch (e) { api.busy(false); A.toast(humanError(e), true); }
     }
@@ -350,7 +351,7 @@
   function payoutCell(p, sub) {
     const r = repById(p.rep_id);
     return `<button class="cell" data-pay="${p.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
-      <div class="s">${E(sub ?? [A.fmtShort(p.payout_date), p.basis].filter(Boolean).join(' · '))}</div></div>
+      <div class="s">${p._pending ? '<span class="pending">● не отправлено</span> ' : ''}${E(sub ?? [A.fmtShort(p.payout_date), p.basis].filter(Boolean).join(' · '))}</div></div>
       <div class="r"><div class="amt">${A.fmtMoney(p.amount)}</div>${A.pill(A.PAY[p.status])}</div></button>`;
   }
   // Переходы из любых списков: заказ, выплата
@@ -371,18 +372,9 @@
     const map = {
       remind: () => ics(`Выплата: ${repById(p.rep_id)?.full_name || ''}`, p.payout_date, `Выплатить ${A.fmtMoney(p.amount)}${p.basis ? ' — ' + p.basis : ''}.`),
       edit: () => payoutForm(p),
-      delete: async () => {
-        if (!(await confirmAct('Удалить запись о выплате?'))) return;
-        const { error } = await sb.from('payouts').delete().eq('id', id); if (fail(error)) return;
-        st.payouts = st.payouts.filter((x) => x.id !== id); api.close(); A.toast('Удалено'); render.body();
-      },
+      delete: () => { api.close(); deleteWithUndo('payouts', id, 'Выплата удалена'); },
     };
-    for (const k of Object.keys(A.PAY)) map['st_' + k] = async () => {
-      api.busy(true);
-      const { data, error } = await sb.from('payouts').update({ status: k }).eq('id', id).select().single();
-      api.busy(false); if (fail(error)) return;
-      Object.assign(p, data); api.close(); A.toast('Статус: ' + A.PAY[k].label); render.body();
-    };
+    for (const k of Object.keys(A.PAY)) map['st_' + k] = () => { api.close(); changeStatus('payouts', id, k, 'Статус: ' + A.PAY[k].label); };
     onActs(api, map);
   }
   function payoutForm(p = null, preset = {}) {
@@ -407,11 +399,9 @@
       try {
         const pk = await resolvePickers(f);
         const row = { ...pk, amount, payout_date: v('payout_date'), status: v('status'), basis: v('basis') || null, comment: v('comment') || null };
-        const q = p ? sb.from('payouts').update(row).eq('id', p.id) : sb.from('payouts').insert(row);
-        const { data, error } = await q.select().single(); if (error) throw error;
-        if (p) Object.assign(p, data); else st.payouts.unshift(data);
+        const r = await write('payouts', p ? 'update' : 'insert', p?.id, row);
         st.payouts.sort((a, b) => b.payout_date.localeCompare(a.payout_date));
-        api.close(); A.toast('Сохранено'); render();
+        api.close(); A.toast('Сохранено' + (r.offline ? ' · отправится при появлении сети' : '')); render();
       } catch (e) { api.busy(false); A.toast(humanError(e), true); }
     }
   }
@@ -626,17 +616,136 @@
     $('body').querySelectorAll('[data-staff]').forEach((c) => c.addEventListener('click', () => staffForm(st.staff.find((s) => s.user_id === c.dataset.staff))));
     $('body').querySelector('[data-act-add]')?.addEventListener('click', () => staffForm());
     $('theme').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) { A.haptic(); A.setTheme(k); renderMore(); } });
-    $('logout').addEventListener('click', async () => { await sb.auth.signOut(); st.me = null; showLogin(); });
+    $('logout').addEventListener('click', async () => {
+      if (queue.length && !(await confirmAct(`Не отправлено изменений: ${queue.length}. При выходе они пропадут. Выйти?`))) return;
+      queue = []; saveQueue(); try { localStorage.removeItem(CKEY); } catch { /* */ }
+      await sb.auth.signOut(); st.me = null; showLogin(); });
   }
 
-  // ---------- быстрые действия свайпом по строке ----------
-  async function quickStatus(table, id, status, msg) {
-    const list = table === 'orders' ? st.orders : st.payouts;
-    const row = list.find((x) => x.id === id); if (!row) return;
-    const { data, error } = await sb.from(table).update({ status }).eq('id', id).select().single();
-    if (fail(error)) return;
-    Object.assign(row, data); A.toast(msg); render.body ? render.body() : render(); renderTabs();
+
+  // =====================================================================
+  // ЗАПИСЬ ДАННЫХ: работа без сети, кэш, отмена действия
+  // =====================================================================
+  const QKEY = 'sverka-queue', CKEY = 'sverka-cache';
+  const isNetErr = (e) => !navigator.onLine || /Failed to fetch|NetworkError|Load failed|network|fetch/i.test(e?.message || String(e || ''));
+  let queue = []; try { queue = JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch { queue = []; }
+  const saveQueue = () => { try { localStorage.setItem(QKEY, JSON.stringify(queue)); } catch { /* переполнено */ } offlineBar(); };
+  const listOf = (table) => (table === 'orders' ? st.orders : st.payouts);
+
+  async function send(w) {
+    let q;
+    if (w.op === 'insert') q = sb.from(w.table).insert({ ...w.row, id: w.id }).select().single();
+    else if (w.op === 'update') q = sb.from(w.table).update(w.row).eq('id', w.id).select().single();
+    else q = sb.from(w.table).delete().eq('id', w.id);
+    const { data, error } = await q;
+    if (error && w.op === 'insert' && error.code === '23505') return (await sb.from(w.table).select('*').eq('id', w.id).single()).data; // уже записано раньше
+    if (error && w.op === 'update' && error.code === 'PGRST116') return null; // запись удалили
+    if (error) throw error;
+    return data;
   }
+  // Местное отражение изменения (до ответа сервера или без сети)
+  function applyLocal(w, pending) {
+    const list = listOf(w.table);
+    if (w.op === 'delete') { const i = list.findIndex((x) => x.id === w.id); if (i >= 0) list.splice(i, 1); return; }
+    let row = list.find((x) => x.id === w.id);
+    if (!row) {
+      const now = new Date().toISOString();
+      row = { id: w.id, status: w.table === 'orders' ? 'ordered' : 'accrued', created_at: now, updated_at: now, created_by: st.me?.user_id, ...w.row };
+      list.unshift(row);
+    } else Object.assign(row, w.row);
+    if (w.row.status === 'delivered' && !row.delivered_at) row.delivered_at = new Date().toISOString();
+    if (w.row.status && w.row.status !== 'delivered') row.delivered_at = null;
+    if (w.row.status === 'paid' && !row.paid_at) row.paid_at = new Date().toISOString();
+    row._pending = pending;
+  }
+  // Записать: сразу на сервер; без сети — в очередь, отправится сама
+  async function write(table, op, id, row = {}) {
+    const w = { table, op, id: id || crypto.randomUUID(), row };
+    if (queue.length) await flush();
+    if (!queue.length) {
+      try {
+        const data = await send(w);
+        if (data) { const list = listOf(table); const r = list.find((x) => x.id === w.id); if (r) { Object.assign(r, data); delete r._pending; } else list.unshift(data); }
+        else applyLocal(w, false);
+        cacheSave();
+        return { id: w.id, offline: false };
+      } catch (e) { if (!isNetErr(e)) throw e; }
+    }
+    queue.push(w); saveQueue(); applyLocal(w, true); cacheSave();
+    return { id: w.id, offline: true };
+  }
+  let flushing = null;
+  function flush() {
+    if (flushing) return flushing;
+    flushing = (async () => {
+      let sent = 0;
+      while (queue.length) {
+        try { await send(queue[0]); queue.shift(); sent++; saveQueue(); }
+        catch (e) {
+          if (isNetErr(e)) break;
+          A.toast('Не удалось отправить изменение: ' + humanError(e), true); queue.shift(); saveQueue();
+        }
+      }
+      if (sent) A.toast(`Отправлено изменений: ${sent}`);
+      return sent;
+    })().finally(() => { flushing = null; });
+    return flushing;
+  }
+  function applyQueue() { for (const w of queue) applyLocal(w, true); }
+  function cacheSave() {
+    try { localStorage.setItem(CKEY, JSON.stringify({ me: st.me, reps: st.reps, stores: st.stores, orders: st.orders, payouts: st.payouts, access: st.access, staff: st.staff })); }
+    catch { /* мало места — без кэша */ }
+  }
+  function cacheLoad() {
+    try { const c = JSON.parse(localStorage.getItem(CKEY) || 'null'); if (!c) return false; Object.assign(st, c); return true; } catch { return false; }
+  }
+  // Полоска «нет сети»
+  function offlineBar() {
+    let bar = $('offline');
+    if (!bar) { bar = document.createElement('div'); bar.id = 'offline'; bar.className = 'offline-bar'; document.body.append(bar); }
+    const off = !navigator.onLine, n = queue.length;
+    bar.textContent = off ? (n ? `Нет сети · не отправлено: ${n}. Отправится само` : 'Нет сети · показаны сохранённые данные')
+      : n ? `Отправка изменений: ${n}…` : '';
+    bar.classList.toggle('show', !!(st.me && (off || n)));
+  }
+  window.addEventListener('online', async () => { offlineBar(); if (await flush()) { await loadAll(); render(); } offlineBar(); });
+  window.addEventListener('offline', offlineBar);
+
+  // Смена статуса с кнопкой «Вернуть»
+  async function changeStatus(table, id, status, msg) {
+    const row = listOf(table).find((x) => x.id === id); if (!row) return;
+    const prev = row.status;
+    try {
+      const r = await write(table, 'update', id, { status });
+      rerender();
+      A.toast(r.offline ? msg + ' · отправится при появлении сети' : msg, false, { label: 'Вернуть', run: async () => {
+        try { await write(table, 'update', id, { status: prev }); rerender(); A.haptic(); } catch (e) { A.toast(humanError(e), true); }
+      } });
+    } catch (e) { A.toast(humanError(e), true); }
+  }
+  // Удаление с отсрочкой 5 секунд: можно вернуть
+  const pendingDeletes = new Map();
+  function deleteWithUndo(table, id, label) {
+    const list = listOf(table), i = list.findIndex((x) => x.id === id); if (i < 0) return;
+    const [row] = list.splice(i, 1); rerender();
+    const timer = setTimeout(() => commitDelete(table, id, row, i), 5000);
+    pendingDeletes.set(id, { table, row, i, timer });
+    A.toast(label, false, { label: 'Вернуть', run: () => {
+      const p = pendingDeletes.get(id); if (!p) return;
+      clearTimeout(p.timer); pendingDeletes.delete(id); listOf(table).splice(Math.min(p.i, listOf(table).length), 0, p.row); rerender(); A.haptic();
+    } });
+  }
+  async function commitDelete(table, id, row, i) {
+    pendingDeletes.delete(id);
+    try { await write(table, 'delete', id); }
+    catch (e) { listOf(table).splice(Math.min(i, listOf(table).length), 0, row); rerender(); A.toast(humanError(e), true); }
+  }
+  // Закрыли вкладку раньше 5 секунд — удаление всё равно выполняется
+  window.addEventListener('pagehide', () => { for (const [id, p] of pendingDeletes) { clearTimeout(p.timer); commitDelete(p.table, id, p.row, p.i); } });
+  function rerender() { if (!st.me) return; (render.body || render)(); renderTabs(); }
+
+  // ---------- быстрые действия свайпом по строке ----------
+  const quickStatus = changeStatus;
   function swipeActions(cell) {
     if (cell.dataset.id) {
       const o = st.orders.find((x) => x.id === cell.dataset.id);
@@ -922,12 +1031,18 @@
       </div>
       ${!s ? `<button class="btn plain" type="button" data-act="gen">Сгенерировать пароль</button>` : ''}
       <button class="btn blue" type="button" data-act="save">${s ? 'Сохранить' : 'Создать'}</button>
-      ${s && !self ? btn('toggle', s.active ? 'Отключить вход' : 'Включить вход', s.active ? 'red' : 'plain') : ''}
+      ${s && !self ? btn('toggle', s.active ? 'Отключить вход' : 'Включить вход', s.active ? 'red' : 'plain') + btn('remove', 'Удалить сотрудника', 'red') : ''}
       <div class="footer-note">Передайте сотруднику логин и пароль лично. Пароль после сохранения не показывается.</div>` });
     const f = api.body; const v = (n) => f.querySelector(`[name=${n}]`).value.trim();
     onActs(api, {
       save: () => save(api),
       gen: () => { f.querySelector('[name=password]').value = Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => (b % 10)).join('') + Math.random().toString(36).slice(2, 6); },
+      remove: async () => {
+        if (!(await confirmAct(`Удалить «${s.full_name}»? Его записи останутся, автор в них станет пустым.`))) return;
+        api.busy(true);
+        try { await staffCall({ action: 'delete', user_id: s.user_id }); st.staff = st.staff.filter((x) => x.user_id !== s.user_id); api.close(); A.toast('Сотрудник удалён'); render(); }
+        catch (e) { api.busy(false); A.toast(e.message, true); }
+      },
       toggle: async () => {
         api.busy(true);
         try { const d = await staffCall({ action: 'update', user_id: s.user_id, active: !s.active }); Object.assign(s, d.staff); api.close(); A.toast(s.active ? 'Вход включён' : 'Вход отключён'); render(); }
@@ -965,6 +1080,9 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   window.addEventListener('focus', () => refresh());
   setInterval(() => refresh(true), 60000);
+
+  // ---------- офлайн-оболочка ----------
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
   // ---------- старт ----------
   sb.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT' && st.me) { st.me = null; showLogin(); } });

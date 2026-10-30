@@ -65,11 +65,14 @@
 
   // ---------- тост ----------
   let toastEl, toastT;
-  function toast(text, err = false) {
+  // action = { label: 'Вернуть', run } — кнопка отмены, тост держится 5 секунд
+  function toast(text, err = false, action = null) {
     if (!toastEl) { toastEl = document.createElement('div'); toastEl.className = 'toast'; document.body.append(toastEl); }
-    toastEl.textContent = text; toastEl.classList.toggle('err', err);
+    toastEl.innerHTML = `<span>${esc(text)}</span>${action ? `<button type="button">${esc(action.label)}</button>` : ''}`;
+    toastEl.classList.toggle('err', err); toastEl.classList.toggle('has-action', !!action);
+    if (action) toastEl.querySelector('button').addEventListener('click', () => { toastEl.classList.remove('show'); clearTimeout(toastT); action.run(); }, { once: true });
     requestAnimationFrame(() => toastEl.classList.add('show'));
-    clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), err ? 4000 : 2200);
+    clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), action ? 5000 : err ? 4000 : 2200);
   }
 
   // ---------- лист снизу ----------

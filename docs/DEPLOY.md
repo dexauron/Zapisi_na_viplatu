@@ -37,3 +37,16 @@ npx supabase@2.119.0 stop
 ## Первый админ
 Email из таблицы `admins` при первом входе получает роль админа (`ensure_profile`).
 Учётку создать: Supabase → Authentication → Users → Add user → email, пароль, **Auto Confirm User**.
+
+## База не засыпает
+`.github/workflows/keepalive.yml` раз в день делает один гостевой запрос (бесплатный Supabase засыпает после 7 дней без запросов).
+Ничего настраивать не нужно — используются те же переменные `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`.
+
+## Резервная копия
+`.github/workflows/backup.yml` каждую ночь (02:17 МСК) выгружает все таблицы в Excel и JSON и упаковывает в 7z с паролем.
+1. Settings → Secrets and variables → Actions → **Secrets** → New repository secret:
+   - `SUPABASE_SECRET_KEY` — Supabase → Project Settings → API Keys → Secret keys (`sb_secret_…`);
+   - `BACKUP_PASSWORD` — свой пароль от архивов (без него архив не открыть).
+2. Скачать копию: Actions → «Резервная копия» → нужный запуск → Artifacts → `sverka-backup` (хранится 30 дней).
+   Открыть: 7-Zip / «Архиватор» → пароль `BACKUP_PASSWORD`.
+Восстановление: таблицы из JSON вставляются через SQL-редактор Supabase в порядке stores → reps → rep_access → staff → orders → payouts.

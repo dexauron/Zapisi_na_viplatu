@@ -1,0 +1,26 @@
+# Бесплатный Supabase ставит проект на паузу после 7 дней без запросов.
+# Раз в день — один лёгкий запрос к базе (гостем, данные не читаются: RLS вернёт пустой список).
+name: База не засыпает
+
+on:
+  schedule:
+    - cron: "41 3 * * *"   # 06:41 по Москве
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Запрос к базе
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-delay 20 \
+            "$SUPABASE_URL/rest/v1/stores?select=id&limit=1" \
+            -H "apikey: $SUPABASE_PUBLISHABLE_KEY")
+          echo "Ответ базы: $code"
+          [ "$code" = 200 ] || { echo "::error::База не ответила (код $code) — проверьте, не на паузе ли проект в Supabase"; exit 1; }

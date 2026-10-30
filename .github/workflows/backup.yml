@@ -1,0 +1,48 @@
+# Ночная резервная копия: все таблицы → Excel + JSON, в архиве 7z с паролем.
+# Репозиторий публичный, поэтому архив зашифрован; хранится 30 дней во вкладке Actions → этот запуск → Artifacts.
+# Нужны секреты (Settings → Secrets and variables → Actions → Secrets):
+#   SUPABASE_SECRET_KEY — секретный ключ sb_secret_… (Supabase → Project Settings → API Keys);
+#   BACKUP_PASSWORD     — пароль от архива (придумайте и сохраните).
+name: Резервная копия
+
+on:
+  schedule:
+    - cron: "17 23 * * *"  # 02:17 по Москве
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Проверка секретов
+        env:
+          KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          PASS: ${{ secrets.BACKUP_PASSWORD }}
+        run: |
+          [ -n "$KEY" ] && [ -n "$PASS" ] || { echo "::error::Нет секретов SUPABASE_SECRET_KEY и/или BACKUP_PASSWORD"; exit 1; }
+          case "$KEY" in sb_secret_*|eyJ*) ;; *) echo "::error::SUPABASE_SECRET_KEY должен быть секретным ключом sb_secret_…"; exit 1;; esac
+      - name: Выгрузка таблиц
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          pip install --quiet openpyxl==3.1.5
+          python3 scripts/backup.py out | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Архив с паролем
+        env:
+          PASS: ${{ secrets.BACKUP_PASSWORD }}
+        run: |
+          7z a -t7z -mhe=on -p"$PASS" "sverka-backup-$(date -u +%F).7z" ./out/* > /dev/null
+          rm -rf out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sverka-backup
+          path: sverka-backup-*.7z
+          retention-days: 30
+          if-no-files-found: error

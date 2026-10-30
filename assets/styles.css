@@ -1,0 +1,55 @@
+:root {
+  --bg: #f4f5f7; --card: #fff; --text: #1d2330; --muted: #6b7385; --line: #e3e6ec;
+  --accent: #1f6feb; --accrued: #8a6d00; --accrued-bg: #fff4cc;
+  --topay: #0b5cad; --topay-bg: #dcebff; --paid: #17723b; --paid-bg: #dcf5e4; --danger: #c62828;
+  --radius: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #12151b; --card: #1b2029; --text: #e7eaf0; --muted: #98a1b3; --line: #2b3240;
+    --accrued: #ffd257; --accrued-bg: #3a3112; --topay: #8cc1ff; --topay-bg: #13304f;
+    --paid: #7fe0a3; --paid-bg: #123522; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+.wrap { max-width: 960px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 20px; margin: 4px 0 2px; } h2 { font-size: 16px; margin: 0 0 12px; }
+.muted { color: var(--muted); } .small { font-size: 13px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
+.totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 12px 0; }
+.total { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; cursor: pointer; }
+.total.active { outline: 2px solid var(--accent); }
+.total .v { font-size: 19px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.st-accrued { color: var(--accrued); background: var(--accrued-bg); }
+.st-topay { color: var(--topay); background: var(--topay-bg); }
+.st-paid { color: var(--paid); background: var(--paid-bg); }
+.month { font-weight: 650; margin: 18px 0 8px; display: flex; justify-content: space-between; }
+.item { display: flex; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 8px; }
+.item .amt { font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.item .note { color: var(--muted); font-size: 13px; margin-top: 2px; word-break: break-word; }
+.empty { text-align: center; padding: 40px 10px; color: var(--muted); }
+/* формы / админка */
+input, select, textarea, button { font: inherit; color: inherit; }
+input, select, textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+textarea { resize: vertical; min-height: 38px; }
+label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+label > input, label > select, label > textarea { margin-top: 3px; color: var(--text); }
+button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--danger); }
+button.link { border: 0; background: none; color: var(--accent); padding: 4px 6px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 12px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.spacer { flex: 1; }
+.tabs { display: flex; gap: 6px; margin: 12px 0; flex-wrap: wrap; }
+.tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tablewrap { overflow-x: auto; }
+.hidden { display: none !important; }
+.msg { padding: 10px 12px; border-radius: 8px; background: var(--topay-bg); color: var(--topay); margin-bottom: 12px; }
+.msg.err { background: #fde2e2; color: var(--danger); }
+dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--text); width: min(560px, 94vw); padding: 16px; }
+dialog::backdrop { background: rgba(0,0,0,.4); }

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Админ — записи на выплату</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="row"><h1>Записи на выплату</h1><span class="spacer"></span>
+    <span id="who" class="muted small"></span><button id="logout" class="link hidden">Выйти</button></div>
+  <div id="msg" class="msg hidden"></div>
+
+  <!-- Вход -->
+  <form id="login" class="card hidden" style="max-width:380px">
+    <h2>Вход администратора</h2>
+    <label>Email<input id="email" type="email" required autocomplete="username"></label>
+    <label>Пароль<input id="password" type="password" required minlength="8" autocomplete="current-password"></label>
+    <div class="row"><button class="primary" type="submit">Войти</button>
+      <button type="button" id="signup" class="link">Создать учётную запись</button></div>
+  </form>
+
+  <div id="app" class="hidden">
+    <div class="tabs">
+      <button data-tab="payouts" class="active">Выплаты</button>
+      <button data-tab="reps">Представители</button>
+      <button data-tab="stores">Магазины</button>
+    </div>
+
+    <!-- Выплаты -->
+    <section id="tab-payouts">
+      <div class="card">
+        <div class="grid">
+          <label>Представитель<select id="f-rep"><option value="">Все</option></select></label>
+          <label>Статус<select id="f-status"><option value="">Все</option></select></label>
+          <label>Месяц<input id="f-month" type="month"></label>
+        </div>
+        <div class="row"><button class="primary" id="add-payout">+ Новая запись</button><span class="spacer"></span>
+          <span id="p-total" class="muted small"></span></div>
+      </div>
+      <div class="card tablewrap"><table>
+        <thead><tr><th>Дата</th><th>Представитель</th><th>Магазин</th><th>Основание</th><th class="num">Сумма</th><th>Статус</th><th></th></tr></thead>
+        <tbody id="p-body"></tbody></table></div>
+    </section>
+
+    <!-- Представители -->
+    <section id="tab-reps" class="hidden">
+      <form id="rep-form" class="card">
+        <h2>Добавить представителя</h2>
+        <div class="grid"><label>ФИО<input id="r-name" required></label><label>Телефон<input id="r-phone" type="tel"></label></div>
+        <button class="primary" type="submit">Добавить</button>
+      </form>
+      <div class="card tablewrap"><table>
+        <thead><tr><th>ФИО</th><th>Телефон</th><th>Доступ</th><th>Ссылка</th><th></th></tr></thead>
+        <tbody id="r-body"></tbody></table></div>
+    </section>
+
+    <!-- Магазины -->
+    <section id="tab-stores" class="hidden">
+      <form id="store-form" class="card">
+        <h2>Добавить магазин</h2>
+        <div class="grid"><label>Название<input id="s-name" required></label><label>Адрес<input id="s-address"></label></div>
+        <button class="primary" type="submit">Добавить</button>
+      </form>
+      <div class="card tablewrap"><table>
+        <thead><tr><th>Название</th><th>Адрес</th><th></th></tr></thead>
+        <tbody id="s-body"></tbody></table></div>
+    </section>
+  </div>
+</div>
+
+<dialog id="pdlg">
+  <form id="pform" method="dialog">
+    <h2 id="pdlg-title">Запись на выплату</h2>
+    <div class="grid">
+      <label>Представитель<select id="p-rep" required></select></label>
+      <label>Магазин<select id="p-store"><option value="">—</option></select></label>
+      <label>Дата<input id="p-date" type="date" required></label>
+      <label>Сумма, ₽<input id="p-amount" type="number" step="0.01" min="0.01" required inputmode="decimal"></label>
+      <label>Статус<select id="p-status"></select></label>
+    </div>
+    <label>Основание<input id="p-basis" placeholder="Накладная №…, акция, бонус"></label>
+    <label>Комментарий<textarea id="p-comment"></textarea></label>
+    <div class="row"><button class="primary" value="save">Сохранить</button><button value="cancel" formnovalidate>Отмена</button>
+      <span class="spacer"></span><button id="p-delete" type="button" class="danger hidden">Удалить</button></div>
+  </form>
+</dialog>
+
+<script src="vendor/supabase.js"></script>
+<script src="assets/config.js"></script>
+<script src="assets/common.js"></script>
+<script src="assets/admin.js"></script>
+</body>
+</html>

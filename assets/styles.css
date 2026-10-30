@@ -253,3 +253,31 @@ body { -webkit-user-select: none; user-select: none; overscroll-behavior-y: none
 .segmented { padding: 3px; border-radius: 11px; }
 .segmented button { min-height: 38px; font-size: 14px; border-radius: 8px; }
 .search .clear { width: 28px; height: 28px; top: 4px; right: 4px; line-height: 28px; background-clip: content-box; padding: 4px; }
+
+/* Выбор представителя: поиск с подсказками */
+.rp .field::before { display: none; }
+.list > .rp ~ .field::before, [data-new] > .field:first-child::before, .rp-res .cell::before, .rp-res .rp-h::before {
+  content: ""; position: absolute; top: 0; left: 16px; right: 0; border-top: .5px solid var(--sep); }
+.rp-val { width: 100%; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.rp-val b { flex: 1; min-width: 0; text-align: right; font-weight: 400; color: var(--blue); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-q input { text-align: left; }
+.rp-res .cell { width: 100%; border: 0; background: none; font: inherit; color: inherit; text-align: left; padding-left: 32px; }
+.rp-res .cell::before { left: 32px; }
+.rp-res .rp-h { position: relative; font-size: 13px; color: var(--label2); padding: 8px 16px 4px 32px; }
+.rp-res .rp-h::before { left: 32px; }
+.rp-res .rp-new { color: var(--blue); }
+mark { background: none; color: inherit; font-weight: 700; }
+
+/* Выплаты: «Запись» и «Оплачено» видно сразу */
+.cell .tick { position: relative; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--orange); flex-shrink: 0; cursor: pointer; }
+.cell .tick::before { content: ""; position: absolute; inset: -11px; }   /* палец попадает легко */
+.cell.paid .tick { background: var(--green); border-color: var(--green); }
+.cell.paid .tick::after { content: ""; position: absolute; left: 6.5px; top: 2.5px; width: 5px; height: 10px; border: solid #fff; border-width: 0 2.5px 2.5px 0; transform: rotate(45deg); }
+.cell.pay.paid .amt { color: var(--green); }
+.cell.pay.paid .t b { font-weight: 500; color: var(--label2); }
+.cell.pay:not(.paid) .amt { font-weight: 700; }
+.hero .amount.paid { color: var(--green); }
+.segmented.in-field { flex: 1; margin: 6px 0; max-width: 240px; margin-left: auto; }
+.segmented.in-field button { font-size: 15px; padding: 6px 8px; }
+.segmented button.on[data-v="to_pay"] { color: var(--orange); }
+.segmented button.on[data-v="paid"] { color: var(--green); }

@@ -17,7 +17,7 @@
   let q = '';
   page.innerHTML = `<div class="large-title">Записи на выплату</div>
     <div class="subtitle">${rows.length ? `${rows.length} ${plural(rows.length)} · ${A.fmtMoney(A.sum(rows))}` : ''}</div>
-    ${A.searchBox('q', 'Имя или компания')}<div id="list"></div>`;
+    ${A.searchBox('q', 'Имя, компания, № накладной')}<div id="list"></div>`;
   const $ = (id) => document.getElementById(id);
   A.bindSearch($('q'), () => { q = $('q').value; render(); });
 
@@ -32,14 +32,14 @@
   }
 
   function render() {
-    const shown = rows.filter((r) => A.matches(q, r.rep, r.company));
+    const shown = rows.filter((r) => A.matches(q, r.rep, r.company, r.invoice_no));
     if (!shown.length) { $('list').innerHTML = A.emptyState(q ? 'Никого не нашли' : 'Записей нет', q ? 'Измените запрос' : 'Новые записи появятся здесь'); return; }
     let html = '';
     for (const [title, items] of A.groupBy(shown, (r) => dayTitle(r.date))) {
       html += `<div class="section-h ${title === 'Прошедшие даты' ? 'red' : ''}"><span>${A.esc(title)}</span><span>${items.length}</span></div><div class="list">`
         + items.map((r) => `<button class="cell" data-rep="${r.rep_id}"><div class="main"><div class="t"><b>${A.esc(r.rep)}</b></div>
-            <div class="s">${A.esc([r.company, title === 'Прошедшие даты' ? A.fmtShort(r.date) : null].filter(Boolean).join(' · ') || ' ')}</div></div>
-            <div class="r"><div class="amt">${A.fmtMoney(r.amount)}</div>${A.pill(A.PAY[r.status])}</div></button>`).join('') + '</div>';
+            <div class="s">${A.esc([r.company, r.invoice_no && '№ ' + r.invoice_no, title === 'Прошедшие даты' ? A.fmtShort(r.date) : null].filter(Boolean).join(' · ') || ' ')}</div></div>
+            <div class="r"><div class="amt">${A.fmtMoney(r.amount)}</div>${A.pill(A.payView(r.status))}</div></button>`).join('') + '</div>';
     }
     $('list').innerHTML = html;
     $('list').querySelectorAll('[data-rep]').forEach((c) => c.addEventListener('click', () => card(c.dataset.rep)));
@@ -60,8 +60,8 @@
         <div class="amount" style="font-size:28px;margin-top:8px">${A.fmtMoney(A.sum(items))}</div></div>
       <div class="section-h"><span>Записи на выплату · ${items.length}</span></div>
       <div class="list">${items.map((r) => `<div class="cell static"><div class="main"><div class="t">${A.esc(cardDate(r.date))}</div>
-        <div class="s">${A.esc([r.basis, r.store].filter(Boolean).join(' · ') || ' ')}</div></div>
-        <div class="r"><div class="amt">${A.fmtMoney(r.amount)}</div>${A.pill(A.PAY[r.status])}</div></div>`).join('')}</div>` });
+        <div class="s">${A.esc([r.invoice_no && 'Накладная № ' + r.invoice_no, r.basis, r.store].filter(Boolean).join(' · ') || ' ')}</div></div>
+        <div class="r"><div class="amt">${A.fmtMoney(r.amount)}</div>${A.pill(A.payView(r.status))}</div></div>`).join('')}</div>` });
   }
 
   render();

@@ -125,6 +125,15 @@ begin
   select count(*) into n from json_array_elements(j) e where (e ->> 'rep_id')::uuid = rep;
   log := log || pg_temp.chk('38 paid hidden from schedule', n::text, '0');
 
+  -- Два статуса выплаты и № накладной
+  select count(*) into n from public.payouts where status = 'accrued';
+  log := log || pg_temp.chk('39 accrued stored as to_pay', n::text, '0');
+  update public.payouts set invoice_no = '  77/1 ' where rep_id = rep;
+  perform set_config('role', 'anon', true);
+  j := public.get_rep_data(tok);
+  perform set_config('role', 'authenticated', true);
+  log := log || pg_temp.chk('40 invoice trimmed, in rep cabinet', j -> 'payouts' -> 0 ->> 'invoice_no', '77/1');
+
   raise exception E'РЕЗУЛЬТАТ\n%', array_to_string(log, E'\n');
 end
 $test$;

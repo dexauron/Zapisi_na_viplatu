@@ -242,9 +242,75 @@
   // Подбор ТП/магазина с возможностью создать новый прямо из формы
   const NEW = '__new__';
   const multiStore = () => st.stores.length > 1;
+  // Представитель: строка поиска с подсказками, как в поисковике (см. A.rank)
+  const repFields = (r) => [r.full_name, r.company, r.phone];
+  function recentReps(n) {
+    const seen = new Set(), out = [];
+    const rows = [...st.orders, ...st.payouts].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    for (const x of rows) {
+      if (seen.has(x.rep_id)) continue; seen.add(x.rep_id);
+      const r = repById(x.rep_id); if (r?.active) out.push(r);
+      if (out.length >= n) break;
+    }
+    return out;
+  }
   function repPicker(repId) {
-    return `${field('Представитель', `<select name="rep_id" required><option value="" disabled ${repId ? '' : 'selected'}>выбрать</option>${opts(st.reps.filter((r) => r.active || r.id === repId), repLabel, repId)}<option value="${NEW}">＋ Новый…</option></select>`)}
+    const r = repById(repId);
+    return `<div class="rp">
+        <input type="hidden" name="rep_id" value="${E(repId || '')}">
+        <button type="button" class="field rp-val ${r ? '' : 'hidden'}"><span>Представитель</span><b>${E(r ? repLabel(r) : '')}</b></button>
+        <label class="field rp-q ${r ? 'hidden' : ''}"><span>Представитель</span><input name="rep_q" type="search" placeholder="Имя, фамилия, компания"
+          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"></label>
+        <div class="rp-res"></div>
+      </div>
       <div class="hidden" data-new="rep">${field('ФИО', '<input name="new_rep_name" placeholder="Иванов Иван">')}${field('Компания', '<input name="new_rep_company" placeholder="необязательно">')}${field('Телефон', '<input name="new_rep_phone" type="tel" placeholder="необязательно">')}</div>`;
+  }
+  function bindRepPicker(f) {
+    const box = f.querySelector('.rp'); if (!box) return;
+    const hid = box.querySelector('[name=rep_id]'), val = box.querySelector('.rp-val'), qrow = box.querySelector('.rp-q');
+    const inp = qrow.querySelector('input'), res = box.querySelector('.rp-res'), newBox = f.querySelector('[data-new=rep]');
+    let prev = hid.value, list = [];
+    const draw = () => {
+      const q = inp.value.trim();
+      const pool = st.reps.filter((r) => r.active);
+      list = q ? A.rank(q, pool, repFields).slice(0, 8) : recentReps(6);
+      res.innerHTML = (!q && list.length ? '<div class="rp-h">Недавние</div>' : '')
+        + list.map((r) => `<button type="button" class="cell rp-item" data-rid="${r.id}"><div class="main">
+            <div class="t">${A.mark(r.full_name, q)}</div>${r.company || r.phone ? `<div class="s">${A.mark([r.company, r.phone].filter(Boolean).join(' · '), q)}</div>` : ''}</div></button>`).join('')
+        + (q && !list.length ? '<div class="rp-h">Не найдено</div>' : '')
+        + `<button type="button" class="cell rp-item rp-new" data-rid="${NEW}"><div class="main"><div class="t">＋ Новый представитель${q ? ` «${E(q)}»` : ''}</div></div></button>`;
+      res.classList.remove('hidden');
+    };
+    const choose = (id) => {
+      hid.value = id; res.innerHTML = '';
+      newBox.classList.toggle('hidden', id !== NEW);
+      if (id === NEW) {
+        const n = newBox.querySelector('[name=new_rep_name]');
+        if (!n.value) n.value = inp.value.trim().replace(/(^|\s)\S/g, (c) => c.toUpperCase());
+        val.querySelector('b').textContent = 'Новый'; qrow.classList.add('hidden'); val.classList.remove('hidden');
+        n.focus(); return;
+      }
+      val.querySelector('b').textContent = repLabel(repById(id));
+      qrow.classList.add('hidden'); val.classList.remove('hidden'); A.haptic();
+      // дальше — сумма: клавиатура откроется сразу (действие пользователя)
+      f.querySelector('[name=amount]')?.focus();
+    };
+    // повторное открытие: прежний выбор вернётся, если ничего не выбрать
+    val.addEventListener('click', () => {
+      prev = hid.value; hid.value = ''; newBox.classList.add('hidden'); val.classList.add('hidden'); qrow.classList.remove('hidden');
+      inp.value = ''; inp.focus(); draw();
+    });
+    inp.addEventListener('focus', draw);
+    let t; inp.addEventListener('input', () => { clearTimeout(t); t = setTimeout(draw, 60); });
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (inp.value.trim() && list[0]) choose(list[0].id); } });
+    // нажатие на подсказку не должно сначала убирать фокус и прятать список
+    for (const ev of ['pointerdown', 'mousedown']) res.addEventListener(ev, (e) => { if (e.target.closest('.rp-item')) e.preventDefault(); });
+    res.addEventListener('click', (e) => { const b = e.target.closest('.rp-item'); if (b) choose(b.dataset.rid); });
+    inp.addEventListener('blur', () => setTimeout(() => {
+      if (document.activeElement === inp || inp.value.trim()) return;
+      res.innerHTML = '';
+      if (prev && repById(prev) && !hid.value) { hid.value = prev; qrow.classList.add('hidden'); val.classList.remove('hidden'); }
+    }, 150));
   }
   // Магазин: выбор только если их больше одного; иначе подставляется единственный
   function storePicker(storeId) {
@@ -253,8 +319,8 @@
       <div class="hidden" data-new="store">${field('Название', '<input name="new_store_name" placeholder="Магазин">')}</div>`;
   }
   function bindPickers(api) {
-    const f = api.body;
-    for (const [sel, key] of [['rep_id', 'rep'], ['store_id', 'store']]) {
+    const f = api.body; bindRepPicker(f);
+    for (const [sel, key] of [['store_id', 'store']]) {
       f.querySelector(`select[name=${sel}]`)?.addEventListener('change', (e) => {
         const box = f.querySelector(`[data-new=${key}]`); box.classList.toggle('hidden', e.target.value !== NEW);
         if (e.target.value === NEW) box.querySelector('input').focus();
@@ -313,7 +379,7 @@
     const showExtra = () => { f.querySelector('#extra').classList.remove('hidden'); f.querySelector('[data-act=more]').classList.add('hidden'); };
     if (o && (o.order_no || o.comment || o.order_date !== t || multiStore())) showExtra();
     onActs(api, { save: () => save(api), more: showExtra });
-    if (!o) setTimeout(() => f.querySelector('[name=rep_id]').focus(), 350);
+    if (!o && !preset.rep_id) setTimeout(() => { const q = f.querySelector('[name=rep_q]'); if (q && !window.matchMedia('(pointer: coarse)').matches) q.focus(); }, 350);
 
     async function save(api) {
       const v = (n) => f.querySelector(`[name=${n}]`).value.trim();
@@ -337,51 +403,79 @@
   // ВЫПЛАТЫ (админ)
   // =====================================================================
   function renderPayouts() {
-    frame('Выплаты', [['all', 'Все'], ['accrued', 'Начислено'], ['to_pay', 'К выплате'], ['paid', 'Выплачено']], 'payouts', 'Представитель, основание, сумма');
+    if (!['all', 'to_pay', 'paid'].includes(st.seg.payouts)) st.seg.payouts = 'all';
+    frame('Выплаты', [['all', 'Все'], ['to_pay', 'Записи'], ['paid', 'Оплачено']], 'payouts', 'Представитель, № накладной, сумма');
     render.body = renderPayoutsBody; renderPayoutsBody();
   }
   function renderPayoutsBody() {
     const seg = st.seg.payouts;
-    const rows = st.payouts.filter((p) => (seg === 'all' || p.status === seg) && A.matches(st.q.payouts,
-      repById(p.rep_id)?.full_name, repById(p.rep_id)?.company, storeById(p.store_id)?.name, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.payout_date)));
-    const toPay = st.payouts.filter((p) => p.status === 'to_pay');
-    let html = `<div class="stats" style="grid-template-columns:1fr">
-      <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--blue)"></span>К выплате · ${toPay.length}</div><div class="v">${A.fmtMoney(A.sum(toPay))}</div></div></div>`;
+    const isPaid = (p) => p.status === 'paid';
+    const rows = st.payouts.filter((p) => (seg === 'all' || (seg === 'paid') === isPaid(p)) && A.matches(st.q.payouts,
+      repById(p.rep_id)?.full_name, repById(p.rep_id)?.company, p.invoice_no, storeById(p.store_id)?.name, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.payout_date)));
+    const open = st.payouts.filter((p) => !isPaid(p)), month = A.today().slice(0, 7);
+    const paidM = st.payouts.filter((p) => isPaid(p) && (p.paid_at || p.payout_date).slice(0, 7) === month);
+    let html = `<div class="stats">
+      <button class="stat ${seg === 'to_pay' ? 'on' : ''}" data-seg="to_pay"><div class="k"><span class="dot" style="background:var(--orange)"></span>Не оплачено · ${open.length}</div><div class="v">${A.fmtMoney(A.sum(open))}</div></button>
+      <button class="stat ${seg === 'paid' ? 'on' : ''}" data-seg="paid"><div class="k"><span class="dot" style="background:var(--green)"></span>Оплачено за месяц</div><div class="v">${A.fmtMoney(A.sum(paidM))}</div></button></div>`;
     for (const [ym, items] of A.groupBy(rows, (p) => p.payout_date.slice(0, 7))) {
       html += `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">` +
         items.map((p) => payoutCell(p)).join('') + '</div>';
     }
     if (!rows.length) html += A.emptyState(st.q.payouts ? 'Ничего не найдено' : 'Выплат нет', st.q.payouts ? '' : 'Нажмите «+», чтобы добавить запись');
     setBody(html);
-    $('body').querySelectorAll('.cell[data-pay]').forEach((c) => c.addEventListener('click', () => payoutDetail(c.dataset.pay)));
+    $('body').querySelectorAll('.stat[data-seg]').forEach((b) => b.addEventListener('click', () => {
+      st.seg.payouts = st.seg.payouts === b.dataset.seg ? 'all' : b.dataset.seg; renderPayouts();
+    }));
+    bindCells($('body'));
   }
+  // Строка выплаты: кружок слева — как в «Напоминаниях»: пустой оранжевый = запись, зелёный с галочкой = оплачено
+  const payNote = (p) => [p.invoice_no && '№ ' + p.invoice_no, p.basis].filter(Boolean).join(' · ');
   function payoutCell(p, sub) {
-    const r = repById(p.rep_id);
-    return `<button class="cell" data-pay="${p.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
-      <div class="s">${p._pending ? '<span class="pending">● не отправлено</span> ' : ''}${E(sub ?? [A.fmtShort(p.payout_date), p.basis].filter(Boolean).join(' · '))}</div></div>
-      <div class="r"><div class="amt">${A.fmtMoney(p.amount)}</div>${A.pill(A.PAY[p.status])}</div></button>`;
+    const r = repById(p.rep_id), paid = p.status === 'paid';
+    return `<button class="cell pay ${paid ? 'paid' : ''}" data-pay="${p.id}">
+      ${isAdmin() ? `<span class="tick" data-tick role="checkbox" aria-checked="${paid}" aria-label="${paid ? 'Снять оплату' : 'Отметить оплаченной'}"></span>` : ''}
+      <div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
+      <div class="s">${p._pending ? '<span class="pending">● не отправлено</span> ' : ''}${E(sub ?? [A.fmtShort(p.payout_date), payNote(p)].filter(Boolean).join(' · '))}</div></div>
+      <div class="r"><div class="amt">${A.fmtMoney(p.amount)}</div>${A.pill(A.payView(p.status))}</div></button>`;
+  }
+  async function togglePaid(id, cell) {
+    const p = st.payouts.find((x) => x.id === id); if (!p) return;
+    A.haptic();
+    if (p.status === 'paid') await changeStatus('payouts', id, 'to_pay', 'Оплата снята');
+    else await changeStatus('payouts', id, 'paid', 'Оплачено');
+    // строка в открытой карточке не перерисовывается вместе со страницей — обновить на месте
+    if (cell?.isConnected) {
+      const paid = p.status === 'paid';
+      cell.classList.toggle('paid', paid);
+      cell.querySelector('[data-tick]')?.setAttribute('aria-checked', String(paid));
+      const pill = cell.querySelector('.pill'); if (pill) pill.outerHTML = A.pill(A.payView(p.status));
+    }
   }
   // Переходы из любых списков: заказ, выплата
   function bindCells(root) {
     root.querySelectorAll('.cell[data-id]').forEach((c) => c.addEventListener('click', () => orderDetail(c.dataset.id)));
-    root.querySelectorAll('.cell[data-pay]').forEach((c) => c.addEventListener('click', () => payoutDetail(c.dataset.pay)));
+    root.querySelectorAll('.cell[data-pay]').forEach((c) => c.addEventListener('click', (e) => {
+      if (e.target.closest('[data-tick]')) { e.stopPropagation(); togglePaid(c.dataset.pay, c); return; }
+      payoutDetail(c.dataset.pay);
+    }));
   }
   function payoutDetail(id) {
     const p = st.payouts.find((x) => x.id === id); if (!p) return;
-    const acts = Object.entries(A.PAY).filter(([k]) => k !== p.status).map(([k, v]) => btn('st_' + k, `Статус: ${v.label}`, k === 'paid' ? 'green' : 'plain'));
+    const paid = p.status === 'paid';
     const api = A.sheet({ title: 'Выплата', left: 'Закрыть', body: `
-      <div class="hero"><div class="amount">${A.fmtMoney(p.amount)}</div><div class="who">${E(repLabel(repById(p.rep_id)))}</div>${A.pill(A.PAY[p.status])}</div>
+      <div class="hero"><div class="amount ${paid ? 'paid' : ''}">${A.fmtMoney(p.amount)}</div><div class="who">${E(repLabel(repById(p.rep_id)))}</div>${A.pill(A.payView(p.status))}</div>
       <div class="section-h"><span>Детали</span></div>
-      ${info([['Дата выплаты', A.fmtDate(p.payout_date)], ['Магазин', storeById(p.store_id)?.name], ['Основание', p.basis], ['Выплачено', A.fmtDate(p.paid_at)], ['Комментарий', p.comment]])}
-      ${acts.join('')}${p.status !== 'paid' && p.payout_date >= A.today() ? btn('remind', 'Напомнить в календаре') : ''}${btn('edit', 'Изменить')}${btn('delete', 'Удалить', 'red')}
+      ${info([['№ накладной', p.invoice_no], ['Дата выплаты', A.fmtDate(p.payout_date)], ['Магазин', storeById(p.store_id)?.name], ['Основание', p.basis], ['Оплачено', A.fmtDate(p.paid_at)], ['Комментарий', p.comment]])}
+      ${paid ? btn('st_to_pay', 'Снять оплату') : btn('st_paid', 'Отметить оплаченной', 'green')}${p.status !== 'paid' && p.payout_date >= A.today() ? btn('remind', 'Напомнить в календаре') : ''}${btn('edit', 'Изменить')}${btn('delete', 'Удалить', 'red')}
       <div class="section-h"><span>История</span></div><div id="hist"></div>` });
     loadHistory({ entity_id: id }, api.body.querySelector('#hist'));
     const map = {
-      remind: () => ics(`Выплата: ${repById(p.rep_id)?.full_name || ''}`, p.payout_date, `Выплатить ${A.fmtMoney(p.amount)}${p.basis ? ' — ' + p.basis : ''}.`),
+      remind: () => ics(`Выплата: ${repById(p.rep_id)?.full_name || ''}`, p.payout_date, `Выплатить ${A.fmtMoney(p.amount)}${payNote(p) ? ' — ' + payNote(p) : ''}.`),
       edit: () => payoutForm(p),
       delete: () => { api.close(); deleteWithUndo('payouts', id, 'Выплата удалена'); },
+      st_paid: () => { api.close(); changeStatus('payouts', id, 'paid', 'Оплачено'); },
+      st_to_pay: () => { api.close(); changeStatus('payouts', id, 'to_pay', 'Оплата снята'); },
     };
-    for (const k of Object.keys(A.PAY)) map['st_' + k] = () => { api.close(); changeStatus('payouts', id, k, 'Статус: ' + A.PAY[k].label); };
     onActs(api, map);
   }
   function payoutForm(p = null, preset = {}) {
@@ -390,14 +484,22 @@
       body: `<div class="section-h"><span>Кому</span></div><div class="list">${repPicker(p?.rep_id || preset.rep_id)}${storePicker(p?.store_id)}</div>
         <div class="section-h"><span>Выплата</span></div><div class="list">
           ${field('Сумма, ₽', `<input name="amount" inputmode="decimal" placeholder="0,00" value="${p ? String(p.amount).replace('.', ',') : ''}">`)}
+          ${field('№ накладной', `<input name="invoice_no" placeholder="необязательно" maxlength="64" autocomplete="off" autocorrect="off" spellcheck="false" value="${E(p?.invoice_no || preset.invoice_no || '')}">`)}
           ${field('Дата выплаты', `<input name="payout_date" type="date" value="${p?.payout_date || A.today()}">`)}
-          ${field('Статус', `<select name="status">${Object.entries(A.PAY).map(([k, v]) => `<option value="${k}" ${k === (p?.status || 'accrued') ? 'selected' : ''}>${v.label}</option>`).join('')}</select>`)}
-          ${field('Основание', `<input name="basis" placeholder="накладная, бонус, акция" value="${E(p?.basis || '')}">`)}
+          <div class="field"><span>Статус</span><input type="hidden" name="status" value="${p?.status === 'paid' ? 'paid' : 'to_pay'}">
+            <div class="segmented in-field" data-status>${Object.entries(A.PAY).map(([k, v]) =>
+              `<button type="button" data-v="${k}" class="${k === (p?.status === 'paid' ? 'paid' : 'to_pay') ? 'on' : ''}">${v.label}</button>`).join('')}</div></div>
+          ${field('Основание', `<input name="basis" placeholder="бонус, акция" value="${E(p?.basis || '')}">`)}
         </div>
         <div class="section-h"><span>Комментарий</span></div><div class="list"><label class="field"><textarea name="comment">${E(p?.comment || '')}</textarea></label></div>
         <button class="btn blue" type="button" data-act="save">${p ? 'Сохранить' : 'Добавить'}</button>`,
     });
     const f = api.body; bindPickers(api); onActs(api, { save: () => save(api) });
+    f.querySelector('[data-status]').addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      f.querySelector('[name=status]').value = b.dataset.v; A.haptic();
+      f.querySelectorAll('[data-status] button').forEach((x) => x.classList.toggle('on', x === b));
+    });
     async function save(api) {
       const v = (n) => f.querySelector(`[name=${n}]`).value.trim();
       const amount = parseAmount(v('amount'));
@@ -405,7 +507,7 @@
       api.busy(true);
       try {
         const pk = await resolvePickers(f);
-        const row = { ...pk, amount, payout_date: v('payout_date'), status: v('status'), basis: v('basis') || null, comment: v('comment') || null };
+        const row = { ...pk, amount, invoice_no: v('invoice_no') || null, payout_date: v('payout_date'), status: v('status'), basis: v('basis') || null, comment: v('comment') || null };
         const r = await write('payouts', p ? 'update' : 'insert', p?.id, row);
         st.payouts.sort((a, b) => b.payout_date.localeCompare(a.payout_date));
         api.close(); A.toast('Сохранено' + (r.offline ? ' · отправится при появлении сети' : '')); render();
@@ -424,7 +526,7 @@
   // Список представителей: первые 60 сразу, остальные порциями при прокрутке — быстро даже при тысяче строк
   function renderDirBody() {
     const q = st.q.dir;
-    const rows = st.reps.filter((r) => A.matches(q, r.full_name, r.company, r.phone));
+    const rows = A.rank(q, st.reps, repFields);
     if (!rows.length) { setBody(A.emptyState(q ? 'Ничего не найдено' : 'Представителей нет', q ? '' : 'Нажмите «+», чтобы добавить')); return; }
     const waiting = new Map();
     for (const o of st.orders) if (o.status === 'ordered') waiting.set(o.rep_id, (waiting.get(o.rep_id) || 0) + 1);
@@ -505,7 +607,7 @@
       let html = '';
       for (const [ym, items] of A.groupBy(rows, (x) => (k === 'orders' ? x.order_date : x.payout_date).slice(0, 7))) {
         html += `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items.filter((x) => x.status !== 'cancelled')))}</span></div><div class="list">`
-          + items.map((x) => (k === 'orders' ? orderRow(x) : payoutCell(x, [A.fmtShort(x.payout_date), x.basis].filter(Boolean).join(' · ')))).join('') + '</div>';
+          + items.map((x) => (k === 'orders' ? orderRow(x) : payoutCell(x, [A.fmtShort(x.payout_date), payNote(x)].filter(Boolean).join(' · ')))).join('') + '</div>';
       }
       box.innerHTML = html; bindCells(box);
     }
@@ -678,12 +780,13 @@
     let row = list.find((x) => x.id === w.id);
     if (!row) {
       const now = new Date().toISOString();
-      row = { id: w.id, status: w.table === 'orders' ? 'ordered' : 'accrued', created_at: now, updated_at: now, created_by: st.me?.user_id, ...w.row };
+      row = { id: w.id, status: w.table === 'orders' ? 'ordered' : 'to_pay', created_at: now, updated_at: now, created_by: st.me?.user_id, ...w.row };
       list.unshift(row);
     } else Object.assign(row, w.row);
     if (w.row.status === 'delivered' && !row.delivered_at) row.delivered_at = new Date().toISOString();
     if (w.row.status && w.row.status !== 'delivered') row.delivered_at = null;
     if (w.row.status === 'paid' && !row.paid_at) row.paid_at = new Date().toISOString();
+    if (w.table === 'payouts' && w.row.status && w.row.status !== 'paid') row.paid_at = null;
     row._pending = pending;
   }
   // Записать: сразу на сервер; без сети — в очередь, отправится сама
@@ -783,9 +886,8 @@
     }
     const p = st.payouts.find((x) => x.id === cell.dataset.pay);
     if (!p || !isAdmin()) return [];
-    if (p.status === 'paid') return [{ label: 'Не выплачено', color: 'gray', run: () => quickStatus('payouts', p.id, 'to_pay', 'Статус: К выплате') }];
-    return [{ label: 'Выплачено', color: 'green', run: () => quickStatus('payouts', p.id, 'paid', 'Статус: Выплачено') },
-      ...(p.status === 'accrued' ? [{ label: 'К выплате', color: 'blue', run: () => quickStatus('payouts', p.id, 'to_pay', 'Статус: К выплате') }] : [])];
+    if (p.status === 'paid') return [{ label: 'Не оплачено', color: 'gray', run: () => quickStatus('payouts', p.id, 'to_pay', 'Оплата снята') }];
+    return [{ label: 'Оплачено', color: 'green', run: () => quickStatus('payouts', p.id, 'paid', 'Оплачено') }];
   }
   A.swipeRows($('page'), swipeActions);
   A.pullToRefresh(() => refresh(true, true));
@@ -828,12 +930,12 @@
     let html = `<div class="subtitle">${E(weekday(t))}</div>${quickActions()}`;
     html += sec(`Заказы просрочены · ${late.length}`, late, late.map(orderCell).join(''), 'red');
     html += sec(`Придут сегодня · ${today.length}`, today, today.map(orderCell).join(''));
-    html += sec(`Выплатить · ${due.length}`, due, due.map((p) => payoutCell(p, p.payout_date < t ? `было на ${A.fmtShort(p.payout_date)}` : p.basis || 'сегодня')).join(''));
+    html += sec(`Выплатить · ${due.length}`, due, due.map((p) => payoutCell(p, p.payout_date < t ? `было на ${A.fmtShort(p.payout_date)}${payNote(p) ? ' · ' + payNote(p) : ''}` : payNote(p) || 'сегодня')).join(''));
     if (!late.length && !today.length && !due.length) {
       html += `<div class="empty"><div class="done-mark">✓</div><div class="big">На сегодня всё</div>Просроченных заказов${isAdmin() ? ' и выплат' : ''} нет</div>`;
     }
     if (tomO.length || tomP.length) {
-      html += `<div class="section-h"><span>Завтра</span></div><div class="list">${tomO.map(orderCell).join('')}${tomP.map((p) => payoutCell(p, p.basis || 'выплата')).join('')}</div>`;
+      html += `<div class="section-h"><span>Завтра</span></div><div class="list">${tomO.map(orderCell).join('')}${tomP.map((p) => payoutCell(p, payNote(p) || 'выплата')).join('')}</div>`;
     }
     setBody(html); bindCells($('body')); bindQuick($('body'));
   }
@@ -863,7 +965,7 @@
     const dayPays = payoutsOn(d);
     let list = '';
     if (dayOrders.length) list += `<div class="section-h"><span>Заказы · ${dayOrders.length}</span><span>${A.fmtMoney(A.sum(dayOrders))}</span></div><div class="list">${dayOrders.map(orderCell).join('')}</div>`;
-    if (dayPays.length) list += `<div class="section-h"><span>Выплаты · ${dayPays.length}</span><span>${A.fmtMoney(A.sum(dayPays))}</span></div><div class="list">${dayPays.map((p) => payoutCell(p, p.basis || A.PAY[p.status].label)).join('')}</div>`;
+    if (dayPays.length) list += `<div class="section-h"><span>Выплаты · ${dayPays.length}</span><span>${A.fmtMoney(A.sum(dayPays))}</span></div><div class="list">${dayPays.map((p) => payoutCell(p, payNote(p) || A.payView(p.status).label)).join('')}</div>`;
     if (!list) list = `<div class="empty" style="padding:28px 16px">${d >= t ? 'На этот день ничего нет' : 'В этот день ничего не было'}</div>`;
     setBody(`<div class="cal list">
         <div class="cal-head"><button class="nav-btn" data-m="-1" aria-label="Предыдущий месяц">‹</button>
@@ -889,13 +991,13 @@
   // ИСТОРИЯ ИЗМЕНЕНИЙ
   // =====================================================================
   const FIELD = { amount: 'сумма', expected_date: 'приход', order_date: 'дата заказа', order_no: '№', comment: 'комментарий', status: 'статус',
-    payout_date: 'дата выплаты', basis: 'основание', full_name: 'ФИО', company: 'компания', phone: 'телефон', active: 'доступ',
+    payout_date: 'дата выплаты', basis: 'основание', invoice_no: '№ накладной', full_name: 'ФИО', company: 'компания', phone: 'телефон', active: 'доступ',
     store_id: 'магазин', rep_id: 'представитель', name: 'название', address: 'адрес', ext_key: 'ключ 1С' };
   function fmtVal(k, v) {
     if (v == null || v === '') return '—';
     if (k === 'amount') return A.fmtMoney(v);
     if (/date$/.test(k)) return A.fmtShort(v);
-    if (k === 'status') return (A.ORD[v] || A.PAY[v])?.label || v;
+    if (k === 'status') return A.ORD[v]?.label || A.payView(v).label;
     if (k === 'active') return v ? 'включён' : 'отключён';
     if (k === 'rep_id') return repById(v)?.full_name || '—';
     if (k === 'store_id') return storeById(v)?.name || '—';

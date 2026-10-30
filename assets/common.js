@@ -25,14 +25,137 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const initials = (n) => String(n || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
   const norm = (s) => String(s ?? '').toLowerCase().replace(/ё/g, 'е');
-  const matches = (q, ...fields) => { q = norm(q).trim(); if (!q) return true; const hay = norm(fields.join(' ')); return q.split(/\s+/).every((w) => hay.includes(w)); };
+
+  // ---------- поиск как в поисковике ----------
+  // Слова и части слов в любом порядке; латиница = кириллица (Abdulla = Абдулла, Akhmed = Ахмед);
+  // набрано не в той раскладке (F,lekkf = Абдулла); опечатка в одну букву; цифры телефона без скобок и дефисов.
+  const CYR = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ж: 'j', з: 'z', и: 'i', й: 'i', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o',
+    п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sh', ъ: '', ы: 'i', ь: '', э: 'e', ю: 'iu', я: 'ia', і: 'i' };
+  const KB_EN = "`qwertyuiop[]asdfghjkl;'zxcvbnm,.", KB_RU = 'ёйцукенгшщзхъфывапролджэячсмитьбю';
+  const swapLayout = (s) => [...s].map((c) => { let i = KB_EN.indexOf(c); if (i >= 0) return KB_RU[i]; i = KB_RU.indexOf(c); return i >= 0 ? KB_EN[i] : c; }).join('');
+  // Приводит русское и латинское написание к одному виду: «Абдуллах», «Abdullakh», «Abdulla h» → abdulah
+  function canon(s) {
+    return norm(s).replace(/[а-яі]/g, (c) => CYR[c] ?? c)
+      .replace(/shch|sch/g, 'sh').replace(/dzh|dj|zh/g, 'j').replace(/kh/g, 'h').replace(/ck|q/g, 'k').replace(/c(?!h)/g, 'k')
+      .replace(/ts|tz/g, 'q').replace(/ph/g, 'f').replace(/w/g, 'v').replace(/x/g, 'ks').replace(/y/g, 'i')
+      .replace(/(^|[^a-z])ie/g, '$1e').replace(/[^a-z0-9]+/g, ' ').replace(/([a-z])\1(?!\1)/g, '$1').trim();
+  }
+  // Расстояние Дамерау — Левенштейна (сколько букв поправить), с ранним выходом
+  function dist(a, b, max) {
+    if (Math.abs(a.length - b.length) > max) return max + 1;
+    let p2 = null, p = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      const c = [i]; let best = i;
+      for (let j = 1; j <= b.length; j++) {
+        c[j] = Math.min(p[j] + 1, c[j - 1] + 1, p[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        if (p2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) c[j] = Math.min(c[j], p2[j - 2] + 1);
+        best = Math.min(best, c[j]);
+      }
+      if (best > max) return max + 1;
+      p2 = p; p = c;
+    }
+    return p[b.length];
+  }
+  const hayCache = new Map();
+  function hayOf(fields) {
+    const key = fields.join('\u0001');
+    let h = hayCache.get(key);
+    if (h) return h;
+    const digits = fields.map((f) => String(f ?? '').replace(/\D/g, '')).filter((d) => d.length > 2);
+    h = { s: ' ' + canon(fields.join(' ')) + ' ' + digits.join(' ') + ' ' };
+    h.words = h.s.trim().split(' ');
+    if (hayCache.size > 8000) hayCache.clear();
+    hayCache.set(key, h);
+    return h;
+  }
+  let lastQ = null, lastPrep = null;
+  function prepQuery(q) {
+    if (q === lastQ) return lastPrep;
+    lastQ = q;
+    lastPrep = norm(q).split(/\s+/).filter(Boolean)
+      .map((t) => [...new Set([canon(t), canon(swapLayout(t))])].filter(Boolean))
+      .filter((v) => v.length);
+    return lastPrep;
+  }
+  function wordScore(w, h) {
+    if (h.s.includes(' ' + w)) return 3;           // начало слова
+    if (h.s.includes(w)) return 2;                 // часть слова
+    if (w.length < 4 || /^\d+$/.test(w)) return 0;
+    const max = w.length >= 8 ? 2 : 1;              // опечатка
+    for (const x of h.words) {
+      if (x.length < w.length - 1) continue;
+      for (const L of [w.length, w.length - 1, w.length + 1]) if (dist(w, x.slice(0, L), max) <= max) return 1;
+    }
+    return 0;
+  }
+  function scoreHay(prep, h) {
+    let s = 0;
+    for (const variants of prep) {
+      let best = 0;
+      // сначала как набрано; другая раскладка — только если так не нашлось и набрано хотя бы 3 знака
+      for (let k = 0; k < variants.length && !best; k++) {
+        const v = variants[k];
+        if (k && v.replace(/ /g, '').length < 3) break;
+        let vs = 0;
+        for (const w of v.split(' ')) { const x = wordScore(w, h); if (!x) { vs = 0; break; } vs += x; }
+        best = k ? vs / 2 : vs;
+      }
+      if (!best) return 0;
+      s += best;
+    }
+    return s;
+  }
+  // Буквы по порядку внутри названия: «абдл» → Абдулла (запасной вариант, если ничего не нашлось)
+  function subseq(prep, h) {
+    if (prep.length !== 1) return false;
+    return prep[0].some((v) => {
+      if (v.length < 3 || v.includes(' ')) return false;
+      for (const x of h.words) {
+        if (x[0] !== v[0]) continue;
+        let i = 1; for (let j = 1; j < x.length && i < v.length; j++) if (x[j] === v[i]) i++;
+        if (i === v.length) return true;
+      }
+      return false;
+    });
+  }
+  const matches = (q, ...fields) => { const p = prepQuery(String(q ?? '').trim()); return !p.length || scoreHay(p, hayOf(fields)) > 0; };
+  // Отбор и сортировка по похожести: лучшие совпадения сверху
+  function rank(q, items, fieldsOf) {
+    const p = prepQuery(String(q ?? '').trim());
+    if (!p.length) return items;
+    const scored = [];
+    items.forEach((it, i) => { const s = scoreHay(p, hayOf(fieldsOf(it))); if (s) scored.push([s, i, it]); });
+    if (!scored.length) items.forEach((it, i) => { if (subseq(p, hayOf(fieldsOf(it)))) scored.push([0.5, i, it]); });
+    return scored.sort((a, b) => b[0] - a[0] || a[1] - b[1]).map((x) => x[2]);
+  }
+  // Подсветка совпавших частей (когда запрос набран теми же буквами, что и текст)
+  function mark(text, q) {
+    text = String(text ?? '');
+    const lo = norm(text), spans = [];
+    for (const t of norm(q).split(/\s+/).filter(Boolean)) {
+      for (const v of new Set([t, swapLayout(t)])) {
+        let i = lo.indexOf(v);
+        while (v && i >= 0) { spans.push([i, i + v.length]); i = lo.indexOf(v, i + v.length); }
+      }
+    }
+    if (!spans.length) return esc(text);
+    spans.sort((a, b) => a[0] - b[0]);
+    let out = '', at = 0;
+    for (const [a, b] of spans) {
+      if (b <= at) continue;
+      const s = Math.max(a, at);
+      out += esc(text.slice(at, s)) + '<mark>' + esc(text.slice(s, b)) + '</mark>'; at = b;
+    }
+    return out + esc(text.slice(at));
+  }
 
   // ---------- статусы ----------
+  // Выплата: «Запись» (ещё не оплачено) или «Оплачено». Старое «Начислено/К выплате» = «Запись».
   const PAY = {
-    accrued: { label: 'Начислено', c: 'gray' },
-    to_pay: { label: 'К выплате', c: 'blue' },
-    paid: { label: 'Выплачено', c: 'green' },
+    to_pay: { label: 'Запись', c: 'orange' },
+    paid: { label: 'Оплачено', c: 'green' },
   };
+  const payView = (s) => PAY[s === 'paid' ? 'paid' : 'to_pay'];
   const ORD = {
     ordered: { label: 'Ожидается', c: 'blue' },
     delivered: { label: 'Пришёл', c: 'green' },
@@ -249,6 +372,6 @@
 
   function emptyState(title, text = '') { return `<div class="empty"><div class="big">${esc(title)}</div>${esc(text)}</div>`; }
 
-  window.App = { sb, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches,
-    PAY, ORD, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON };
+  window.App = { sb, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches, rank, mark, canon,
+    PAY, payView, ORD, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON };
 })();

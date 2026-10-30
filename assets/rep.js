@@ -47,10 +47,8 @@
       ];
     }
     return [
-      [null, 'Всего', 'gray', payouts],
-      ['accrued', 'Начислено', 'gray', payouts.filter((p) => p.status === 'accrued')],
-      ['to_pay', 'К выплате', 'blue', payouts.filter((p) => p.status === 'to_pay')],
-      ['paid', 'Выплачено', 'green', payouts.filter((p) => p.status === 'paid')],
+      ['to_pay', 'Не оплачено', 'orange', payouts.filter((p) => p.status !== 'paid')],
+      ['paid', 'Оплачено', 'green', payouts.filter((p) => p.status === 'paid')],
     ];
   }
   function renderStats() {
@@ -68,8 +66,8 @@
       return orders.filter((o) => (!st.filter || (st.filter === 'wait' ? o.status === 'ordered' : o.view.key === st.filter))
         && A.matches(st.q, o.store, o.order_no, o.comment, o.amount, A.fmtMoney(o.amount), A.fmtDate(o.date), o.view.label));
     }
-    return payouts.filter((p) => (!st.filter || p.status === st.filter)
-      && A.matches(st.q, p.store, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.date), A.PAY[p.status].label));
+    return payouts.filter((p) => (!st.filter || (st.filter === 'paid') === (p.status === 'paid'))
+      && A.matches(st.q, p.invoice_no, p.store, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.date), A.payView(p.status).label));
   }
 
   function renderList() {
@@ -82,7 +80,8 @@
         if (st.tab === 'orders') {
           html += cell(r.id, r.store || 'Заказ от ' + A.fmtShort(r.date), A.orderWhen(r), r.amount, r.view);
         } else {
-          html += cell(r.id, r.basis || 'Выплата', A.fmtShort(r.date), r.amount, A.PAY[r.status]);
+          html += cell(r.id, r.invoice_no ? 'Накладная № ' + r.invoice_no : r.basis || 'Выплата',
+            [A.fmtShort(r.date), r.invoice_no && r.basis].filter(Boolean).join(' · '), r.amount, A.payView(r.status), r.status === 'paid' ? 'pay paid' : 'pay');
         }
       }
       html += '</div>';
@@ -90,7 +89,7 @@
     $('list').innerHTML = html;
     $('list').querySelectorAll('.cell').forEach((c) => c.addEventListener('click', () => detail(c.dataset.id)));
   }
-  const cell = (id, t, s, amount, view) => `<button class="cell" data-id="${id}">
+  const cell = (id, t, s, amount, view, cls = '') => `<button class="cell ${cls}" data-id="${id}">
     <div class="main"><div class="t"><b>${A.esc(t)}</b></div><div class="s">${A.esc(s)}</div></div>
     <div class="r"><div class="amt">${A.fmtMoney(amount)}</div>${A.pill(view)}</div></button>`;
 
@@ -108,9 +107,9 @@
     } else {
       const p = payouts.find((x) => x.id === id);
       A.sheet({ title: 'Выплата', left: 'Закрыть', body: `
-        <div class="hero"><div class="amount">${A.fmtMoney(p.amount)}</div><div class="who">${A.pill(A.PAY[p.status])}</div></div>
+        <div class="hero"><div class="amount ${p.status === 'paid' ? 'paid' : ''}">${A.fmtMoney(p.amount)}</div><div class="who">${A.pill(A.payView(p.status))}</div></div>
         <div class="section-h"><span>Детали</span></div>
-        ${info([['Дата', A.fmtDate(p.date)], ['Магазин', p.store], ['Основание', p.basis], ['Выплачено', A.fmtDate(p.paid_at)], ['Комментарий', p.comment]])}` });
+        ${info([['№ накладной', p.invoice_no], ['Дата', A.fmtDate(p.date)], ['Магазин', p.store], ['Основание', p.basis], ['Оплачено', A.fmtDate(p.paid_at)], ['Комментарий', p.comment]])}` });
     }
   }
 

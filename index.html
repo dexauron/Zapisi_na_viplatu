@@ -2,19 +2,21 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <meta name="robots" content="noindex">
-  <title>Мои выплаты</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <link rel="apple-touch-icon" href="assets/icon-180.png">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <title>Мои заказы и выплаты</title>
   <link rel="stylesheet" href="assets/styles.css">
 </head>
 <body>
-<div class="wrap">
-  <h1 id="title">Мои выплаты</h1>
-  <div id="sub" class="muted small">Загрузка…</div>
-  <div id="totals" class="totals hidden"></div>
-  <div id="list"></div>
-</div>
+<header class="nav" id="nav"><div class="nav-inner"><span class="nav-btn"></span><div class="nav-title" id="nav-title"></div><span class="nav-btn"></span></div></header>
+<main class="page" id="page"><div class="spinner"></div></main>
 <script src="vendor/supabase.js"></script>
 <script src="assets/config.js"></script>
 <script src="assets/common.js"></script>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Заказы">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="assets/icon-180.png">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <title>Заказы и выплаты</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<!-- Вход -->
+<form class="login hidden" id="login" autocomplete="on">
+  <img class="logo" src="assets/icon.svg" alt="">
+  <h1>Заказы и выплаты</h1>
+  <p>Вход для сотрудников магазина</p>
+  <div class="list">
+    <label class="field"><span>Логин</span><input id="l-user" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="логин или email" required></label>
+    <label class="field"><span>Пароль</span><input id="l-pass" type="password" autocomplete="current-password" placeholder="обязательно" required></label>
+  </div>
+  <button class="btn blue" type="submit">Войти</button>
+  <p class="footer-note" style="text-align:center;margin-top:14px">Учётную запись выдаёт администратор</p>
+</form>
+
+<!-- Приложение -->
+<header class="nav hidden" id="nav"><div class="nav-inner">
+  <button class="nav-btn" id="nav-left"></button><div class="nav-title" id="nav-title"></div>
+  <button class="nav-btn right plus" id="nav-plus" aria-label="Добавить">+</button></div></header>
+<main class="page hidden" id="page"></main>
+<nav class="tabbar hidden" id="tabbar"><div class="tabbar-inner" id="tabs"></div></nav>
+<div class="spinner" id="boot"></div>
+
+<script src="vendor/supabase.js"></script>
+<script src="assets/config.js"></script>
+<script src="assets/common.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>

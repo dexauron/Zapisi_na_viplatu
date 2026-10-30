@@ -165,3 +165,5 @@ button, input, select, textarea { font: inherit; color: inherit; letter-spacing:
   body.app-on .page { padding-bottom: 48px; }
   body.app-on .sheet { left: 232px; }
 }
+
+.field input[type=checkbox] { flex: none; width: 22px; height: 22px; accent-color: var(--green); }

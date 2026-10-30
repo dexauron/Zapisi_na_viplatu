@@ -43,6 +43,8 @@ begin
   exception when others then log := log || ('07 ok anon ensure_profile denied: ' || sqlerrm); end;
   begin insert into public.orders (rep_id, amount) values (rep, 1); log := log || '08 FAIL anon inserted order'::text;
   exception when others then log := log || ('08 ok anon insert denied: ' || sqlerrm); end;
+  begin perform public.import_reps('[{"key":"x","full_name":"x"}]'::jsonb); log := log || '08b FAIL anon imported reps'::text;
+  exception when others then log := log || ('08b ok anon import denied: ' || sqlerrm); end;
 
   -- Сотрудник
   perform set_config('role', 'authenticated', true);
@@ -69,6 +71,9 @@ begin
     log := log || '22 FAIL arrival before order accepted'::text;
   exception when others then log := log || ('22 ok arrival before order denied: ' || sqlerrm); end;
 
+  begin perform public.import_reps('[{"key":"x","full_name":"x"}]'::jsonb); log := log || '22b FAIL employee imported reps'::text;
+  exception when others then log := log || ('22b ok employee import denied: ' || sqlerrm); end;
+
   -- Отключённый сотрудник и посторонний вошедший
   perform set_config('request.jwt.claims', json_build_object('sub', off, 'role', 'authenticated')::text, true);
   select count(*) into n from public.orders; log := log || pg_temp.chk('23 disabled employee sees orders', (n)::text, '0');
@@ -90,6 +95,19 @@ begin
   delete from public.orders where rep_id = rep2; get diagnostics n = row_count; log := log || pg_temp.chk('30 admin deleted order rows', (n)::text, '1');
   begin delete from public.reps where id = rep; log := log || '31 FAIL rep with orders deleted'::text;
   exception when others then log := log || ('31 ok rep with orders kept: ' || sqlerrm); end;
+
+  -- Загрузка справочника из 1С
+  j := public.import_reps(jsonb_build_array(
+    jsonb_build_object('key', 'ооо тест тп петров', 'full_name', 'Петров', 'company', 'ООО Тест', 'phone', '+79990000000'),
+    jsonb_build_object('key', 'тп другой', 'full_name', 'ТП Другой'),
+    jsonb_build_object('key', 'тп другой', 'full_name', 'дубль')));
+  log := log || pg_temp.chk('32 import added/updated/skipped', (j ->> 'added') || '/' || (j ->> 'updated') || '/' || (j ->> 'skipped'), '1/1/1');
+  select count(*) into n from public.rep_access a join public.reps r on r.id = a.rep_id where r.ext_key = 'ооо тест тп петров';
+  log := log || pg_temp.chk('33 imported rep got link', n::text, '1');
+  j := public.import_reps(jsonb_build_array(jsonb_build_object('key', 'ооо тест тп петров', 'full_name', 'Петров', 'company', 'ООО Тест', 'phone', '+79990000000')), true);
+  log := log || pg_temp.chk('34 reimport same/deactivated', (j ->> 'same') || '/' || (j ->> 'deactivated'), '1/1');
+  select active::text into v from public.reps where id = rep2; log := log || pg_temp.chk('35 missing rep disabled', v, 'false');
+  select active::text into v from public.reps where id = rep; log := log || pg_temp.chk('36 manual rep untouched', v, 'true');
 
   raise exception E'РЕЗУЛЬТАТ\n%', array_to_string(log, E'\n');
 end

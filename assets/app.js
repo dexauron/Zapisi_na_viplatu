@@ -434,7 +434,8 @@
     const pays = st.payouts.filter((p) => p.rep_id === id);
     const toPay = pays.filter((p) => p.status === 'to_pay');
     let acts = btn('order', 'Новый заказ у представителя', 'blue');
-    if (r.phone) acts += btn('call', `Позвонить: ${r.phone}`);
+    const phone1 = (r.phone || '').split(',')[0].trim();
+    if (phone1) acts += btn('call', `Позвонить: ${phone1}`);
     if (isAdmin()) {
       acts += `<div class="section-h"><span>Ссылка для представителя</span></div>` + btn('copy', 'Скопировать ссылку') + btn('wa', 'Отправить в WhatsApp') + btn('open', 'Открыть кабинет')
         + btn('regen', 'Выдать новую ссылку') + `<div class="footer-note">Новая ссылка сразу отключает старую.</div>`
@@ -458,10 +459,10 @@
     onActs(api, {
       order: () => orderForm(null, { rep_id: id }),
       payout: () => payoutForm(null, { rep_id: id }),
-      call: () => (location.href = 'tel:' + r.phone.replace(/[^\d+]/g, '')),
+      call: () => (location.href = 'tel:' + phone1.replace(/[^\d+]/g, '')),
       copy: async () => { try { await navigator.clipboard.writeText(link()); A.toast('Ссылка скопирована'); } catch { window.prompt('Скопируйте ссылку', link()); } },
       wa: () => {
-        const phone = (r.phone || '').replace(/\D/g, '').replace(/^8(?=\d{10}$)/, '7');
+        const phone = phone1.replace(/\D/g, '').replace(/^8(?=\d{10}$)/, '7');
         const text = `${r.full_name}, здесь ваши заказы и выплаты: ${link()}`;
         window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
       },
@@ -542,7 +543,10 @@
         + `<button class="cell action" data-act-add>＋ Добавить сотрудника</button></div>
         <div class="section-h"><span>${st.stores.length > 1 ? 'Магазины' : 'Магазин'}</span></div><div class="list">`
         + st.stores.map((s) => `<button class="cell" data-store="${s.id}"><div class="main"><div class="t">${E(s.name)}</div>${s.address ? `<div class="s">${E(s.address)}</div>` : ''}</div></button>`).join('')
-        + `<button class="cell action" data-act-store>＋ Добавить магазин</button></div>`;
+        + `<button class="cell action" data-act-store>＋ Добавить магазин</button></div>
+        <div class="section-h"><span>Справочник представителей</span></div><div class="list">
+          <button class="cell action" data-act-import>Обновить из файла 1С</button></div>
+        <div class="footer-note">Выгрузка справочника «Контрагенты» (.xls, .xlsx). Новые добавятся, изменённые обновятся, ссылки сохранятся.</div>`;
     } else {
       html += `<div class="list" style="margin-top:12px"><div class="cell static"><div class="avatar">${E(A.initials(st.me.full_name))}</div>
         <div class="main"><div class="t"><b>${E(st.me.full_name)}</b></div><div class="s">${E(st.me.login)} · ${roleName(st.me)}</div></div></div></div>`;
@@ -555,9 +559,66 @@
     setBody(html);
     $('body').querySelectorAll('[data-store]').forEach((c) => c.addEventListener('click', () => storeForm(storeById(c.dataset.store))));
     $('body').querySelector('[data-act-store]')?.addEventListener('click', () => storeForm());
+    $('body').querySelector('[data-act-import]')?.addEventListener('click', () => importReps());
     $('body').querySelectorAll('[data-staff]').forEach((c) => c.addEventListener('click', () => staffForm(st.staff.find((s) => s.user_id === c.dataset.staff))));
     $('body').querySelector('[data-act-add]')?.addEventListener('click', () => staffForm());
     $('logout').addEventListener('click', async () => { await sb.auth.signOut(); st.me = null; showLogin(); });
+  }
+
+  // ---------- загрузка справочника представителей из 1С ----------
+  function loadXLSX() {
+    if (window.XLSX) return Promise.resolve();
+    return new Promise((ok, bad) => {
+      const el = document.createElement('script'); el.src = 'vendor/xlsx.core.min.js';
+      el.onload = ok; el.onerror = () => bad(new Error('Не удалось загрузить модуль чтения Excel'));
+      document.head.append(el);
+    });
+  }
+  function importReps() {
+    const api = A.sheet({ title: 'Обновить из 1С', left: 'Закрыть', body: `
+      <div class="footer-note" style="margin:12px 4px">В 1С: Справочник «Контрагенты» → «Ещё» → «Вывести список» → сохранить в Excel.
+        Строки вида «ООО Компания ТП Иванов Иван» разделятся на компанию и представителя.</div>
+      <input type="file" id="imp-file" accept=".xls,.xlsx,.csv" class="hidden">
+      <button class="btn blue" type="button" data-act="pick">Выбрать файл</button>
+      <div id="imp-preview"></div>` });
+    const f = api.body, input = f.querySelector('#imp-file');
+    let rows = null;
+    onActs(api, {
+      pick: () => input.click(),
+      run: async () => {
+        const off = f.querySelector('#imp-off')?.checked || false;
+        api.busy(true);
+        const { data, error } = await sb.rpc('import_reps', { p_rows: rows, p_deactivate_missing: off });
+        if (error) { api.busy(false); return fail(error); }
+        await loadAll(); lastLoad = Date.now();
+        api.close(); render();
+        A.toast(`Добавлено ${data.added}, обновлено ${data.updated}` + (data.deactivated ? `, отключено ${data.deactivated}` : ''));
+      },
+    });
+    input.addEventListener('change', async () => {
+      const file = input.files[0]; if (!file) return;
+      const box = f.querySelector('#imp-preview');
+      box.innerHTML = '<div class="spinner" style="margin:24px auto"></div>';
+      try {
+        await loadXLSX();
+        const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        const aoa = window.XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', raw: false });
+        rows = window.RepImport.parseRows(aoa);
+        if (!rows.length) throw new Error('В файле нет ни одного контрагента');
+        const d = window.RepImport.diff(rows, st.reps);
+        const line = (k, v) => `<div class="cell static"><div class="main">${E(k)}</div><div class="value">${v}</div></div>`;
+        box.innerHTML = `<div class="section-h"><span>${E(file.name)}</span></div><div class="list">
+            ${line('В файле', rows.length)}${line('Новых', d.added.length)}${line('Изменится', d.updated.length)}${line('Без изменений', d.same)}</div>
+          ${d.added.length ? `<div class="section-h"><span>Новые, первые ${Math.min(5, d.added.length)}</span></div><div class="list">${d.added.slice(0, 5).map((r) =>
+            `<div class="cell static"><div class="main"><div class="t">${E(r.full_name)}</div><div class="s">${E([r.company, r.phone].filter(Boolean).join(' · ') || '—')}</div></div></div>`).join('')}</div>` : ''}
+          ${d.missing.length ? `<div class="list" style="margin-top:12px"><label class="field"><span style="width:auto;flex:1">Отключить тех, кого нет в файле (${d.missing.length})</span><input type="checkbox" id="imp-off"></label></div>
+            <div class="footer-note">Их ссылки перестанут работать. Записи о заказах и выплатах сохранятся.</div>` : ''}
+          <button class="btn blue" type="button" data-act="run" ${d.added.length || d.updated.length || d.missing.length ? '' : 'disabled'}>Обновить справочник</button>`;
+        f.querySelector('[data-act=pick]').textContent = 'Выбрать другой файл';
+        f.querySelector('[data-act=pick]').className = 'btn plain';
+      } catch (e) { rows = null; box.innerHTML = ''; A.toast(e.message, true); }
+      input.value = '';
+    });
   }
 
   async function staffCall(payload) {

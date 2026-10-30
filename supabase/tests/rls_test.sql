@@ -119,7 +119,9 @@ begin
   select active::text into v from public.reps where id = rep; log := log || pg_temp.chk('36 manual rep untouched', v, 'true');
 
   log := log || pg_temp.chk('37 admin shared link token', (public.shared_link_token() = stok)::text, 'true');
+  perform set_config('role', 'anon', true);
   j := public.get_payout_schedule(stok);
+  perform set_config('role', 'authenticated', true);
   select count(*) into n from json_array_elements(j) e where (e ->> 'rep_id')::uuid = rep;
   log := log || pg_temp.chk('38 paid hidden from schedule', n::text, '0');
 

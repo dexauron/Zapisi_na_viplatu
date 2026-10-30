@@ -5,6 +5,18 @@
   A.navScroll(document.getElementById('nav'));
   document.getElementById('nav-title').textContent = 'Записи на выплату';
 
+  // Страницу открыли из приложения («Ещё» → «Открыть»). На телефоне приложение идёт без адресной
+  // строки браузера, поэтому вернуться назад нечем — даём свою кнопку.
+  // По ссылке из WhatsApp метки нет и кнопки не будет: представителю возвращаться некуда.
+  if (new URLSearchParams(location.search).get('from') === 'app') {
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'nav-btn';
+    back.textContent = '\u2039 Назад';
+    back.addEventListener('click', () => { location.href = 'app.html'; });
+    document.querySelector('#nav .nav-inner').firstElementChild.replaceWith(back);
+  }
+
   const token = (location.hash.replace(/^#/, '') || new URLSearchParams(location.search).get('t') || '').trim();
   const fail = (t, s) => (page.innerHTML = A.emptyState(t, s));
   if (!token) return fail('Ссылка неполная', 'Попросите администратора прислать ссылку.');

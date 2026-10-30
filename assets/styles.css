@@ -42,6 +42,9 @@ body { -webkit-user-select: none; user-select: none; overscroll-behavior-y: none
 .nav.scrolled .nav-title { opacity: 1; }
 .nav-btn { min-width: 70px; border: 0; background: none; color: var(--blue); font-size: 17px; padding: 8px; cursor: pointer; }
 .nav-btn.right { text-align: right; } .nav-btn.plus { font-size: 28px; font-weight: 300; line-height: 1; }
+.nav-right { min-width: 70px; display: flex; align-items: center; justify-content: flex-end; }
+.nav-right .nav-btn { min-width: 0; padding: 8px 6px; }
+.nav-btn.menu svg { display: block; width: 22px; height: 22px; fill: var(--blue); }
 .large-title { font-size: 34px; font-weight: 700; letter-spacing: .37px; margin: 4px 0 2px; }
 .subtitle { color: var(--label2); font-size: 15px; margin-bottom: 10px; }
 

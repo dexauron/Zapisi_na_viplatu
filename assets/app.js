@@ -7,7 +7,7 @@
   const STAFF_DOMAIN = 'staff.zapisi.app';
 
   const st = {
-    me: null, tab: 'today', cal: null,
+    me: null, tab: 'today', back: 'today', cal: null,
     reps: [], stores: [], orders: [], payouts: [], access: [], staff: [],
     seg: { today: 'today', orders: 'wait', payouts: 'all', dir: 'reps' }, q: { orders: '', payouts: '', dir: '' },
   };
@@ -19,7 +19,8 @@
     { id: 'orders', label: 'Заказы', icon: SVG('M7 4h10l1 3h3v2h-1.3l-1.6 10.2A2 2 0 0 1 16.1 21H7.9a2 2 0 0 1-2-1.8L4.3 9H3V7h3l1-3Zm-.7 5 1.6 10h8.2l1.6-10H6.3ZM8.4 6l-.3 1h7.8l-.3-1H8.4Z') },
     { id: 'payouts', label: 'Выплаты', admin: true, icon: SVG('M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Zm1 2v8h16V8H4Zm8 1.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM6 10h2v4H6v-4Zm10 0h2v4h-2v-4Z') },
     { id: 'dir', label: 'Представители', icon: SVG('M9 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm-7 14c0-3.3 3.1-5 7-5s7 1.7 7 5v1H2v-1Zm2.2-1h9.6c-.5-1.3-2.3-2-4.8-2s-4.3.7-4.8 2ZM16.5 5a3.5 3.5 0 0 1 0 7v-2a1.5 1.5 0 0 0 0-3V5Zm1.3 10c2.5.4 4.2 1.8 4.2 4v2h-3v-2c0-1.3-.6-2.4-1.2-3.1V15Z') },
-    { id: 'more', label: 'Ещё', icon: SVG('M5 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z') },
+    // «Ещё» внизу не показывается: его открывает кнопка с тремя чёрточками справа вверху
+    { id: 'more', label: 'Ещё', top: true },
   ];
 
   // ---------- общие помощники ----------
@@ -124,17 +125,23 @@
 
   // ---------- оболочка ----------
   function renderTabs() {
-    $('tabs').innerHTML = TABS.filter((t) => !t.admin || isAdmin()).map((t) =>
+    $('tabs').innerHTML = TABS.filter((t) => !t.top && (!t.admin || isAdmin())).map((t) =>
       `<button data-tab="${t.id}" class="${st.tab === t.id ? 'on' : ''}">${t.icon}<span>${t.label}</span>${t.id === 'today' && badgeCount() ? `<em class="tab-badge">${badgeCount()}</em>` : ''}</button>`).join('');
     const n = badgeCount();
     try { n ? navigator.setAppBadge?.(n) : navigator.clearAppBadge?.(); } catch { /* значок на иконке поддерживается не везде */ }
   }
+  function openTab(t) {
+    st.tab = t; render(); window.scrollTo(0, 0);
+    $('page').classList.remove('enter'); void $('page').offsetWidth; $('page').classList.add('enter');
+  }
   $('tabs').addEventListener('click', (e) => {
     const t = e.target.closest('button')?.dataset.tab; if (!t) return;
     if (t === st.tab) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
-    A.haptic(); st.tab = t; render(); window.scrollTo(0, 0);
-    $('page').classList.remove('enter'); void $('page').offsetWidth; $('page').classList.add('enter');
+    A.haptic(); openTab(t);
   });
+  // Три чёрточки справа вверху открывают «Ещё», слева появляется «Назад» на прежнюю вкладку
+  $('nav-more').addEventListener('click', () => { if (st.tab === 'more') return; A.haptic(); st.back = st.tab; openTab('more'); });
+  $('nav-left').addEventListener('click', () => { if (st.tab !== 'more') return; A.haptic(); openTab(st.back || 'today'); });
   A.navScroll($('nav'));
   $('nav-plus').addEventListener('click', () => {
     if (st.tab === 'orders' || st.tab === 'today') orderForm(null, st.tab === 'today' && st.seg.today === 'cal' && st.cal?.day > A.today() ? { expected_date: st.cal.day } : {});
@@ -147,6 +154,8 @@
     const t = TABS.find((x) => x.id === st.tab);
     $('nav-title').textContent = t.label;
     $('nav-plus').style.visibility = st.tab === 'more' && !isAdmin() ? 'hidden' : 'visible';
+    $('nav-more').style.visibility = st.tab === 'more' ? 'hidden' : 'visible';
+    $('nav-left').textContent = st.tab === 'more' ? '\u2039 Назад' : '';
     ({ today: renderToday, orders: renderOrders, payouts: renderPayouts, dir: renderDir, more: renderMore })[st.tab]();
     renderTabs();
   }
@@ -1080,8 +1089,11 @@
     if (act === 'reset' && !(await confirmAct('Старая общая ссылка перестанет работать. Выдать новую?'))) return;
     const { data: token, error } = await sb.rpc('shared_link_token', { p_reset: act === 'reset' });
     if (fail(error)) return;
-    const url = new URL('list.html', location.href).href.split('#')[0] + '#' + token;
-    if (act === 'open') window.open(url, '_blank', 'noopener');
+    const base = new URL('list.html', location.href).href.split('#')[0];
+    const url = base + '#' + token;
+    // «Открыть» — с меткой from=app: на странице появится кнопка «Назад» в приложение.
+    // Скопированная и отправленная в WhatsApp ссылка остаётся без метки: представителю возвращаться некуда.
+    if (act === 'open') window.open(base + '?from=app#' + token, '_blank', 'noopener');
     else if (act === 'wa') window.open(`https://wa.me/?text=${encodeURIComponent('Записи на выплату: ' + url)}`, '_blank', 'noopener');
     else {
       try { await navigator.clipboard.writeText(url); A.toast(act === 'reset' ? 'Новая ссылка скопирована' : 'Ссылка скопирована'); }

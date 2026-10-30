@@ -61,9 +61,14 @@
     boot();
   });
 
+  const withTimeout = (pr, ms) => Promise.race([pr, new Promise((_, no) => setTimeout(() => no(new Error('network timeout')), ms))]);
   async function boot() {
     $('boot').classList.remove('hidden');
-    const { data: { session } } = await sb.auth.getSession();
+    // Без сети: сразу из сохранённых данных, не дожидаясь попыток связаться с сервером
+    if (!navigator.onLine && hasSavedSession() && cacheLoad() && st.me) { applyQueue(); return showApp(); }
+    let session = null;
+    try { ({ data: { session } } = await withTimeout(sb.auth.getSession(), 6000)); }
+    catch { if (hasSavedSession() && cacheLoad() && st.me) { applyQueue(); return showApp(); } }
     if (!session) return showLogin();
     let { data: me, error } = await sb.rpc('ensure_profile');
     if (error && isNetErr(error)) {
@@ -76,13 +81,17 @@
       return showLogin();
     }
     st.me = me;
-    if (!isAdmin() && st.tab === 'payouts') st.tab = 'today';
     await loadAll(); lastLoad = Date.now();
+    showApp();
+  }
+  function hasSavedSession() { try { return Object.keys(localStorage).some((k) => /^sb-.*-auth-token$/.test(k)); } catch { return false; } }
+  function showApp() {
+    if (!isAdmin() && st.tab === 'payouts') st.tab = 'today';
     $('boot').classList.add('hidden');
     ['nav', 'page', 'tabbar'].forEach((id) => $(id).classList.remove('hidden'));
     document.body.classList.add('app-on');
     $('login').classList.add('hidden');
-    renderTabs(); render();
+    renderTabs(); render(); offlineBar();
   }
   function showLogin() {
     $('boot').classList.add('hidden');
@@ -100,6 +109,7 @@
     ];
     if (isAdmin()) q.push(sb.from('payouts').select('*').order('payout_date', { ascending: false }).order('created_at', { ascending: false }),
       sb.from('rep_access').select('*'));
+    if (!navigator.onLine && cacheLoad()) { applyQueue(); offlineBar(); return; }
     if (queue.length) await flush();
     let res;
     try { res = await Promise.all(q); } catch (e) { res = [{ error: e }]; }

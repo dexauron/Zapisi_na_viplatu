@@ -1,4 +1,4 @@
--- Схема «Записи на выплату» (применена к проекту Supabase ngdplfvspsxazybtqbvg)
+-- Схема «Записи на выплату» (применена к проекту Supabase yxgbfvpxpbsoxnyokmce)
 create extension if not exists pgcrypto with schema extensions;
 
 create table public.admins (

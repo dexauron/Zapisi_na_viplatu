@@ -7,14 +7,15 @@
   const STAFF_DOMAIN = 'staff.zapisi.app';
 
   const st = {
-    me: null, tab: 'orders',
+    me: null, tab: 'today', cal: null,
     reps: [], stores: [], orders: [], payouts: [], access: [], staff: [],
-    seg: { orders: 'wait', payouts: 'all', dir: 'reps' }, q: { orders: '', payouts: '', dir: '' },
+    seg: { today: 'today', orders: 'wait', payouts: 'all', dir: 'reps' }, q: { orders: '', payouts: '', dir: '' },
   };
   const isAdmin = () => st.me?.role === 'admin';
 
   const SVG = (d) => `<svg viewBox="0 0 24 24"><path d="${d}"/></svg>`;
   const TABS = [
+    { id: 'today', label: 'Сегодня', icon: SVG('M7 2h2v2h6V2h2v2h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2V2ZM5 9v10h14V9H5Zm2 2h4v4H7v-4Z') },
     { id: 'orders', label: 'Заказы', icon: SVG('M7 4h10l1 3h3v2h-1.3l-1.6 10.2A2 2 0 0 1 16.1 21H7.9a2 2 0 0 1-2-1.8L4.3 9H3V7h3l1-3Zm-.7 5 1.6 10h8.2l1.6-10H6.3ZM8.4 6l-.3 1h7.8l-.3-1H8.4Z') },
     { id: 'payouts', label: 'Выплаты', admin: true, icon: SVG('M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Zm1 2v8h16V8H4Zm8 1.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM6 10h2v4H6v-4Zm10 0h2v4h-2v-4Z') },
     { id: 'dir', label: 'Представители', icon: SVG('M9 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm-7 14c0-3.3 3.1-5 7-5s7 1.7 7 5v1H2v-1Zm2.2-1h9.6c-.5-1.3-2.3-2-4.8-2s-4.3.7-4.8 2ZM16.5 5a3.5 3.5 0 0 1 0 7v-2a1.5 1.5 0 0 0 0-3V5Zm1.3 10c2.5.4 4.2 1.8 4.2 4v2h-3v-2c0-1.3-.6-2.4-1.2-3.1V15Z') },
@@ -71,7 +72,7 @@
       return showLogin();
     }
     st.me = me;
-    if (!isAdmin() && st.tab === 'payouts') st.tab = 'orders';
+    if (!isAdmin() && st.tab === 'payouts') st.tab = 'today';
     await loadAll(); lastLoad = Date.now();
     $('boot').classList.add('hidden');
     ['nav', 'page', 'tabbar'].forEach((id) => $(id).classList.remove('hidden'));
@@ -106,7 +107,9 @@
   // ---------- оболочка ----------
   function renderTabs() {
     $('tabs').innerHTML = TABS.filter((t) => !t.admin || isAdmin()).map((t) =>
-      `<button data-tab="${t.id}" class="${st.tab === t.id ? 'on' : ''}">${t.icon}<span>${t.label}</span></button>`).join('');
+      `<button data-tab="${t.id}" class="${st.tab === t.id ? 'on' : ''}">${t.icon}<span>${t.label}</span>${t.id === 'today' && badgeCount() ? `<em class="tab-badge">${badgeCount()}</em>` : ''}</button>`).join('');
+    const n = badgeCount();
+    try { n ? navigator.setAppBadge?.(n) : navigator.clearAppBadge?.(); } catch { /* значок на иконке поддерживается не везде */ }
   }
   $('tabs').addEventListener('click', (e) => {
     const t = e.target.closest('button')?.dataset.tab; if (!t) return;
@@ -115,7 +118,7 @@
   });
   A.navScroll($('nav'));
   $('nav-plus').addEventListener('click', () => {
-    if (st.tab === 'orders') orderForm();
+    if (st.tab === 'orders' || st.tab === 'today') orderForm(null, st.tab === 'today' && st.seg.today === 'cal' && st.cal?.day > A.today() ? { expected_date: st.cal.day } : {});
     else if (st.tab === 'payouts') payoutForm();
     else if (st.tab === 'dir') repForm();
     else if (st.tab === 'more' && isAdmin()) staffForm();
@@ -125,7 +128,8 @@
     const t = TABS.find((x) => x.id === st.tab);
     $('nav-title').textContent = t.label;
     $('nav-plus').style.visibility = st.tab === 'more' && !isAdmin() ? 'hidden' : 'visible';
-    ({ orders: renderOrders, payouts: renderPayouts, dir: renderDir, more: renderMore })[st.tab]();
+    ({ today: renderToday, orders: renderOrders, payouts: renderPayouts, dir: renderDir, more: renderMore })[st.tab]();
+    renderTabs();
   }
   // Каркас вкладки: заголовок, сегменты, поиск; список перерисовывается отдельно, чтобы поиск не терял фокус
   function frame(title, segs, segKey, searchPh) {
@@ -191,6 +195,7 @@
     const r = repById(o.rep_id), s = storeById(o.store_id), v = ordView(o);
     const acts = [];
     if (o.status === 'ordered') acts.push(btn('arrived', 'Отметить: пришёл', 'green'));
+    if (o.status === 'ordered' && o.expected_date >= A.today()) acts.push(btn('remind', 'Напомнить в календаре'));
     acts.push(btn('edit', 'Изменить'));
     if (o.status === 'ordered') acts.push(btn('cancel', 'Отменить заказ', 'red'));
     else acts.push(btn('reopen', 'Вернуть в «Ожидается»'));
@@ -201,10 +206,9 @@
       ${info([['Магазин', s?.name], ['№ заказа', o.order_no], ['Дата заказа', A.fmtDate(o.order_date)],
         ['Ожидаемый приход', o.expected_date ? `${A.fmtDate(o.expected_date)} (${A.relDay(o.expected_date)})` : 'не указан'],
         ['Пришёл', A.fmtDate(o.delivered_at)], ['Комментарий', o.comment]])}
-      <div class="section-h"><span>История</span></div>
-      ${info([['Записал', `${staffName(o.created_by) || '—'}, ${A.fmtDate(o.created_at)}`],
-        ['Изменил', o.updated_by ? `${staffName(o.updated_by) || '—'}, ${A.fmtDate(o.updated_at)}` : null]])}
-      ${acts.join('')}` });
+      ${acts.join('')}
+      <div class="section-h"><span>История</span></div><div id="hist">${info([['Записал', `${staffName(o.created_by) || '—'}, ${A.fmtDate(o.created_at)}`]])}</div>` });
+    loadHistory({ entity_id: id }, api.body.querySelector('#hist'));
     const setStatus = async (status, msg) => {
       api.busy(true);
       const { data, error } = await sb.from('orders').update({ status }).eq('id', id).select().single();
@@ -215,6 +219,7 @@
       arrived: () => setStatus('delivered', 'Отмечено: пришёл'),
       cancel: async () => { if (await confirmAct('Отменить заказ?')) setStatus('cancelled', 'Заказ отменён'); },
       reopen: () => setStatus('ordered', 'Заказ снова ожидается'),
+      remind: () => ics(`Заказ: ${r?.full_name || ''}`, o.expected_date, `Должен прийти заказ на ${A.fmtMoney(o.amount)}${o.order_no ? ', № ' + o.order_no : ''}.`),
       edit: () => orderForm(o),
       delete: async () => {
         if (!(await confirmAct('Удалить заказ без возможности восстановления?'))) return;
@@ -271,7 +276,7 @@
       title: o ? 'Изменить заказ' : 'Новый заказ', right: { label: 'Готово', onClick: (api) => save(api) },
       body: `<div class="list" style="margin-top:8px">${repPicker(o?.rep_id || preset.rep_id)}
           ${field('Сумма, ₽', `<input name="amount" inputmode="decimal" placeholder="0,00" value="${o ? String(o.amount).replace('.', ',') : ''}" required>`)}
-          ${field('Придёт', `<input name="expected_date" type="date" value="${o ? o.expected_date || '' : A.addDays(t, 1)}">`)}
+          ${field('Придёт', `<input name="expected_date" type="date" value="${o ? o.expected_date || '' : preset.expected_date || A.addDays(t, 1)}">`)}
         </div>
         <div class="chips" id="chips">${[['Завтра', 1], ['+2 дня', 2], ['+3 дня', 3], ['Неделя', 7], ['Без даты', null]].map(([l, n]) => `<button type="button" class="chip" data-d="${n}">${l}</button>`).join('')}</div>
         <button class="btn plain" type="button" data-act="more" style="background:none;margin-top:10px;padding:8px">Ещё поля</button>
@@ -335,14 +340,22 @@
       <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--blue)"></span>К выплате · ${toPay.length}</div><div class="v">${A.fmtMoney(A.sum(toPay))}</div></div></div>`;
     for (const [ym, items] of A.groupBy(rows, (p) => p.payout_date.slice(0, 7))) {
       html += `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">` +
-        items.map((p) => { const r = repById(p.rep_id), s = storeById(p.store_id);
-          return `<button class="cell" data-id="${p.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
-            <div class="s">${E([A.fmtShort(p.payout_date), p.basis, s?.name].filter(Boolean).join(' · '))}</div></div>
-            <div class="r"><div class="amt">${A.fmtMoney(p.amount)}</div>${A.pill(A.PAY[p.status])}</div></button>`; }).join('') + '</div>';
+        items.map((p) => payoutCell(p)).join('') + '</div>';
     }
     if (!rows.length) html += A.emptyState(st.q.payouts ? 'Ничего не найдено' : 'Выплат нет', st.q.payouts ? '' : 'Нажмите «+», чтобы добавить запись');
     setBody(html);
-    $('body').querySelectorAll('.cell[data-id]').forEach((c) => c.addEventListener('click', () => payoutDetail(c.dataset.id)));
+    $('body').querySelectorAll('.cell[data-pay]').forEach((c) => c.addEventListener('click', () => payoutDetail(c.dataset.pay)));
+  }
+  function payoutCell(p, sub) {
+    const r = repById(p.rep_id);
+    return `<button class="cell" data-pay="${p.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
+      <div class="s">${E(sub ?? [A.fmtShort(p.payout_date), p.basis].filter(Boolean).join(' · '))}</div></div>
+      <div class="r"><div class="amt">${A.fmtMoney(p.amount)}</div>${A.pill(A.PAY[p.status])}</div></button>`;
+  }
+  // Переходы из любых списков: заказ, выплата
+  function bindCells(root) {
+    root.querySelectorAll('.cell[data-id]').forEach((c) => c.addEventListener('click', () => orderDetail(c.dataset.id)));
+    root.querySelectorAll('.cell[data-pay]').forEach((c) => c.addEventListener('click', () => payoutDetail(c.dataset.pay)));
   }
   function payoutDetail(id) {
     const p = st.payouts.find((x) => x.id === id); if (!p) return;
@@ -350,9 +363,12 @@
     const api = A.sheet({ title: 'Выплата', left: 'Закрыть', body: `
       <div class="hero"><div class="amount">${A.fmtMoney(p.amount)}</div><div class="who">${E(repLabel(repById(p.rep_id)))}</div>${A.pill(A.PAY[p.status])}</div>
       <div class="section-h"><span>Детали</span></div>
-      ${info([['Дата', A.fmtDate(p.payout_date)], ['Магазин', storeById(p.store_id)?.name], ['Основание', p.basis], ['Выплачено', A.fmtDate(p.paid_at)], ['Комментарий', p.comment]])}
-      ${acts.join('')}${btn('edit', 'Изменить')}${btn('delete', 'Удалить', 'red')}` });
+      ${info([['Дата выплаты', A.fmtDate(p.payout_date)], ['Магазин', storeById(p.store_id)?.name], ['Основание', p.basis], ['Выплачено', A.fmtDate(p.paid_at)], ['Комментарий', p.comment]])}
+      ${acts.join('')}${p.status !== 'paid' && p.payout_date >= A.today() ? btn('remind', 'Напомнить в календаре') : ''}${btn('edit', 'Изменить')}${btn('delete', 'Удалить', 'red')}
+      <div class="section-h"><span>История</span></div><div id="hist"></div>` });
+    loadHistory({ entity_id: id }, api.body.querySelector('#hist'));
     const map = {
+      remind: () => ics(`Выплата: ${repById(p.rep_id)?.full_name || ''}`, p.payout_date, `Выплатить ${A.fmtMoney(p.amount)}${p.basis ? ' — ' + p.basis : ''}.`),
       edit: () => payoutForm(p),
       delete: async () => {
         if (!(await confirmAct('Удалить запись о выплате?'))) return;
@@ -427,30 +443,57 @@
   const repLink = (rep) => { const t = st.access.find((a) => a.rep_id === rep.id)?.token; return t ? new URL('index.html', location.href).href.split('#')[0] + '#' + t : null; };
   const newToken = () => Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => b.toString(16).padStart(2, '0')).join('');
 
-  function repDetail(id) {
+  function repDetail(id, tab = 'orders') {
     const r = repById(id); if (!r) return;
     const ords = st.orders.filter((o) => o.rep_id === id);
     const wait = ords.filter((o) => o.status === 'ordered');
     const pays = st.payouts.filter((p) => p.rep_id === id);
-    const toPay = pays.filter((p) => p.status === 'to_pay');
-    let acts = btn('order', 'Новый заказ у представителя', 'blue');
+    const unpaid = pays.filter((p) => p.status !== 'paid');
     const phone1 = (r.phone || '').split(',')[0].trim();
-    if (phone1) acts += btn('call', `Позвонить: ${phone1}`);
+    const tabs = [['orders', `Заказы · ${ords.length}`], ...(isAdmin() ? [['payouts', `Выплаты · ${pays.length}`]] : []), ['history', 'История']];
+    let acts = '';
     if (isAdmin()) {
-      acts += `<div class="section-h"><span>Ссылка для представителя</span></div>` + btn('copy', 'Скопировать ссылку') + btn('wa', 'Отправить в WhatsApp') + btn('open', 'Открыть кабинет')
-        + btn('regen', 'Выдать новую ссылку') + `<div class="footer-note">Новая ссылка сразу отключает старую.</div>`
-        + `<div class="section-h"><span>Управление</span></div>` + btn('payout', 'Новая выплата') + btn('edit', 'Изменить данные')
-        + btn('toggle', r.active ? 'Отключить доступ' : 'Включить доступ', r.active ? 'red' : 'plain') + btn('delete', 'Удалить', 'red');
+      acts += `<div class="section-h"><span>Личная ссылка</span></div><div class="list">
+          <button class="cell action" data-act="copy">Скопировать ссылку</button>
+          <button class="cell action" data-act="wa">Отправить в WhatsApp</button>
+          <button class="cell action" data-act="open">Открыть кабинет</button>
+          <button class="cell action" data-act="regen">Выдать новую ссылку</button></div>
+        <div class="section-h"><span>Управление</span></div><div class="list">
+          <button class="cell action" data-act="edit">Изменить данные</button>
+          <button class="cell ${r.active ? 'danger' : 'action'}" data-act="toggle">${r.active ? 'Отключить доступ' : 'Включить доступ'}</button>
+          <button class="cell danger" data-act="delete">Удалить</button></div>`;
     }
-    const api = A.sheet({ title: 'Представитель', left: 'Закрыть', body: `
+    const api = A.sheet({ title: '', left: 'Закрыть', body: `
       <div class="hero"><div class="avatar" style="width:72px;height:72px;font-size:28px;margin:0 auto 8px">${E(A.initials(r.full_name))}</div>
         <div style="font-size:22px;font-weight:700">${E(r.full_name)}</div><div class="who">${E(r.company || 'Торговый представитель')}${r.active ? '' : ' · отключён'}</div></div>
-      <div class="stats" style="margin-top:14px">
-        <div class="stat" style="cursor:default"><div class="k">Ожидается · ${wait.length}</div><div class="v">${A.fmtMoney(A.sum(wait))}</div></div>
-        <div class="stat" style="cursor:default"><div class="k">${isAdmin() ? `К выплате · ${toPay.length}` : `Всего заказов · ${ords.length}`}</div><div class="v">${A.fmtMoney(isAdmin() ? A.sum(toPay) : A.sum(ords.filter((o) => o.status !== 'cancelled')))}</div></div></div>
-      ${ords.length ? `<div class="section-h"><span>Последние заказы</span></div><div class="list">${ords.slice(0, 5).map(orderCell).join('')}</div>` : ''}
+      <div class="quick" style="justify-content:center;margin:14px 0 4px">
+        <button class="qbtn" data-act="order">${QI.order}<span>Заказ</span></button>
+        ${isAdmin() ? `<button class="qbtn" data-act="payout">${QI.pay}<span>Выплата</span></button>` : ''}
+        ${phone1 ? `<button class="qbtn" data-act="call">${QI.call}<span>Звонок</span></button>` : ''}
+      </div>
+      <div class="stats" style="margin-top:10px">
+        <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--blue)"></span>Ожидается · ${wait.length}</div><div class="v">${A.fmtMoney(A.sum(wait))}</div></div>
+        ${isAdmin() ? `<div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--gray)"></span>Не выплачено · ${unpaid.length}</div><div class="v">${A.fmtMoney(A.sum(unpaid))}</div></div>`
+          : `<div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--green)"></span>Пришло · ${ords.filter((o) => o.status === 'delivered').length}</div><div class="v">${A.fmtMoney(A.sum(ords.filter((o) => o.status === 'delivered')))}</div></div>`}
+      </div>
+      <div class="segmented" id="rseg">${tabs.map(([k, l]) => `<button data-k="${k}" class="${k === tab ? 'on' : ''}">${E(l)}</button>`).join('')}</div>
+      <div id="rtab"></div>
       ${acts}` });
-    api.body.querySelectorAll('.cell[data-id]').forEach((c) => c.addEventListener('click', () => orderDetail(c.dataset.id)));
+    const box = api.body.querySelector('#rtab');
+    function showTab(k) {
+      api.body.querySelectorAll('#rseg button').forEach((b) => b.classList.toggle('on', b.dataset.k === k));
+      if (k === 'history') { box.innerHTML = ''; loadHistory({ rep_id: id }, box); return; }
+      const rows = k === 'orders' ? ords : pays;
+      if (!rows.length) { box.innerHTML = A.emptyState(k === 'orders' ? 'Заказов нет' : 'Выплат нет'); return; }
+      let html = '';
+      for (const [ym, items] of A.groupBy(rows, (x) => (k === 'orders' ? x.order_date : x.payout_date).slice(0, 7))) {
+        html += `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items.filter((x) => x.status !== 'cancelled')))}</span></div><div class="list">`
+          + items.map((x) => (k === 'orders' ? orderRow(x) : payoutCell(x, [A.fmtShort(x.payout_date), x.basis].filter(Boolean).join(' · ')))).join('') + '</div>';
+      }
+      box.innerHTML = html; bindCells(box);
+    }
+    api.body.querySelector('#rseg').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) showTab(k); });
+    showTab(tab);
     const link = () => repLink(r);
     const update = async (patch, msg) => {
       const { data, error } = await sb.from('reps').update(patch).eq('id', id).select().single(); if (fail(error)) return;
@@ -481,6 +524,13 @@
         st.reps = st.reps.filter((x) => x.id !== id); api.close(); A.toast('Удалено'); render();
       },
     });
+  }
+  // Заказ в карточке представителя: имя не повторяем, показываем дату и срок
+  function orderRow(o) {
+    const v = ordView(o);
+    const when = A.orderWhen({ status: o.status, expected: o.expected_date, delivered_at: o.delivered_at });
+    return `<button class="cell" data-id="${o.id}"><div class="main"><div class="t">Заказ от ${E(A.fmtShort(o.order_date))}${o.order_no ? ' · № ' + E(o.order_no) : ''}</div>
+      <div class="s">${E(when)}</div></div><div class="r"><div class="amt">${A.fmtMoney(o.amount)}</div>${A.pill(v)}</div></button>`;
   }
   function repForm(r = null) {
     const api = A.sheet({ title: r ? 'Изменить' : 'Новый представитель', right: { label: 'Готово', onClick: (a) => save(a) }, body: `
@@ -544,6 +594,8 @@
         <div class="section-h"><span>${st.stores.length > 1 ? 'Магазины' : 'Магазин'}</span></div><div class="list">`
         + st.stores.map((s) => `<button class="cell" data-store="${s.id}"><div class="main"><div class="t">${E(s.name)}</div>${s.address ? `<div class="s">${E(s.address)}</div>` : ''}</div></button>`).join('')
         + `<button class="cell action" data-act-store>＋ Добавить магазин</button></div>
+        <div class="section-h"><span>Контроль</span></div><div class="list">
+          <button class="cell action" data-act-history>История изменений</button></div>
         <div class="section-h"><span>Общая ссылка для представителей</span></div><div class="list">
           <button class="cell action" data-shared="copy">Скопировать ссылку</button>
           <button class="cell action" data-shared="wa">Отправить в WhatsApp</button>
@@ -566,10 +618,193 @@
     $('body').querySelectorAll('[data-store]').forEach((c) => c.addEventListener('click', () => storeForm(storeById(c.dataset.store))));
     $('body').querySelector('[data-act-store]')?.addEventListener('click', () => storeForm());
     $('body').querySelector('[data-act-import]')?.addEventListener('click', () => importReps());
+    $('body').querySelector('[data-act-history]')?.addEventListener('click', () => historySheet());
     $('body').querySelectorAll('[data-shared]').forEach((c) => c.addEventListener('click', () => sharedLink(c.dataset.shared)));
     $('body').querySelectorAll('[data-staff]').forEach((c) => c.addEventListener('click', () => staffForm(st.staff.find((s) => s.user_id === c.dataset.staff))));
     $('body').querySelector('[data-act-add]')?.addEventListener('click', () => staffForm());
     $('logout').addEventListener('click', async () => { await sb.auth.signOut(); st.me = null; showLogin(); });
+  }
+
+  // =====================================================================
+  // СЕГОДНЯ и КАЛЕНДАРЬ
+  // =====================================================================
+  const QI = {
+    order: SVG('M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z'),
+    pay: SVG('M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Zm1 2v8h16V8H4Zm8 1.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z'),
+    call: SVG('M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.46.57 3.6a1 1 0 0 1-.25 1l-2.2 2.2Z'),
+    cal: SVG('M7 2h2v2h6V2h2v2h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2V2ZM5 9v10h14V9H5Z'),
+  };
+  const lateOrders = () => st.orders.filter((o) => o.status === 'ordered' && o.expected_date && o.expected_date < A.today());
+  const ordersOn = (d) => st.orders.filter((o) => o.status === 'ordered' && o.expected_date === d);
+  const duePayouts = () => (isAdmin() ? st.payouts.filter((p) => p.status !== 'paid' && p.payout_date <= A.today()) : []);
+  const payoutsOn = (d) => (isAdmin() ? st.payouts.filter((p) => p.payout_date === d) : []);
+  function badgeCount() { return st.me ? lateOrders().length + ordersOn(A.today()).length + duePayouts().length : 0; }
+  const weekday = (d) => { const x = new Date(d + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' }); return x[0].toUpperCase() + x.slice(1); };
+
+  function renderToday() {
+    frame('Сегодня', [['today', 'Список'], ['cal', 'Календарь']], 'today', null);
+    render.body = st.seg.today === 'cal' ? renderCalendar : renderTodayBody; render.body();
+  }
+  function quickActions() {
+    return `<div class="quick"><button class="qbtn" data-q="order">${QI.order}<span>Заказ</span></button>
+      ${isAdmin() ? `<button class="qbtn" data-q="payout">${QI.pay}<span>Выплата</span></button>` : ''}</div>`;
+  }
+  function bindQuick(root) {
+    root.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', () => {
+      const q = b.dataset.q;
+      if (q === 'order') orderForm(); else payoutForm();
+    }));
+  }
+  function renderTodayBody() {
+    const t = A.today(), t1 = A.addDays(t, 1);
+    const late = lateOrders(), today = ordersOn(t), due = duePayouts().sort((a, b) => a.payout_date.localeCompare(b.payout_date));
+    const tomO = ordersOn(t1), tomP = payoutsOn(t1).filter((p) => p.status !== 'paid');
+    const sec = (title, items, cells, cls = '') => (items.length ? `<div class="section-h ${cls}"><span>${E(title)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">${cells}</div>` : '');
+    let html = `<div class="subtitle">${E(weekday(t))}</div>${quickActions()}`;
+    html += sec(`Заказы просрочены · ${late.length}`, late, late.map(orderCell).join(''), 'red');
+    html += sec(`Придут сегодня · ${today.length}`, today, today.map(orderCell).join(''));
+    html += sec(`Выплатить · ${due.length}`, due, due.map((p) => payoutCell(p, p.payout_date < t ? `было на ${A.fmtShort(p.payout_date)}` : p.basis || 'сегодня')).join(''));
+    if (!late.length && !today.length && !due.length) {
+      html += `<div class="empty"><div class="done-mark">✓</div><div class="big">На сегодня всё</div>Просроченных заказов${isAdmin() ? ' и выплат' : ''} нет</div>`;
+    }
+    if (tomO.length || tomP.length) {
+      html += `<div class="section-h"><span>Завтра</span></div><div class="list">${tomO.map(orderCell).join('')}${tomP.map((p) => payoutCell(p, p.basis || 'выплата')).join('')}</div>`;
+    }
+    setBody(html); bindCells($('body')); bindQuick($('body'));
+  }
+
+  function renderCalendar() {
+    const t = A.today();
+    st.cal = st.cal || { ym: t.slice(0, 7), day: t };
+    const [y, m] = st.cal.ym.split('-').map(Number);
+    const offset = (new Date(y, m - 1, 1).getDay() + 6) % 7, dim = new Date(y, m, 0).getDate();
+    const cells = Math.ceil((offset + dim) / 7) * 7;
+    let grid = '';
+    for (let i = 0; i < cells; i++) {
+      const n = i - offset + 1;
+      if (n < 1 || n > dim) { grid += '<div class="cal-day empty"></div>'; continue; }
+      const d = `${st.cal.ym}-${String(n).padStart(2, '0')}`;
+      const o = st.orders.filter((x) => x.expected_date === d && x.status !== 'cancelled');
+      const p = payoutsOn(d);
+      const dots = [
+        o.some((x) => x.status === 'ordered') && `<i style="background:var(--${d < t ? 'red' : 'blue'})"></i>`,
+        (o.some((x) => x.status === 'delivered') || p.some((x) => x.status === 'paid')) && '<i style="background:var(--green)"></i>',
+        p.some((x) => x.status !== 'paid') && `<i style="background:var(--${d < t ? 'red' : 'gray'})"></i>`,
+      ].filter(Boolean).join('');
+      grid += `<button class="cal-day ${d === t ? 'today' : ''} ${d === st.cal.day ? 'sel' : ''}" data-d="${d}"><span>${n}</span><b>${dots}</b></button>`;
+    }
+    const d = st.cal.day;
+    const dayOrders = st.orders.filter((x) => x.expected_date === d && x.status !== 'cancelled');
+    const dayPays = payoutsOn(d);
+    let list = '';
+    if (dayOrders.length) list += `<div class="section-h"><span>Заказы · ${dayOrders.length}</span><span>${A.fmtMoney(A.sum(dayOrders))}</span></div><div class="list">${dayOrders.map(orderCell).join('')}</div>`;
+    if (dayPays.length) list += `<div class="section-h"><span>Выплаты · ${dayPays.length}</span><span>${A.fmtMoney(A.sum(dayPays))}</span></div><div class="list">${dayPays.map((p) => payoutCell(p, p.basis || A.PAY[p.status].label)).join('')}</div>`;
+    if (!list) list = `<div class="empty" style="padding:28px 16px">${d >= t ? 'На этот день ничего нет' : 'В этот день ничего не было'}</div>`;
+    setBody(`<div class="cal list">
+        <div class="cal-head"><button class="nav-btn" data-m="-1" aria-label="Предыдущий месяц">‹</button>
+          <b>${E(A.fmtMonth(st.cal.ym))}</b>
+          <button class="nav-btn right" data-m="1" aria-label="Следующий месяц">›</button></div>
+        <div class="cal-grid wd">${['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((x) => `<div>${x}</div>`).join('')}</div>
+        <div class="cal-grid">${grid}</div>
+        <div class="cal-legend"><span><i style="background:var(--blue)"></i>придёт заказ</span>${isAdmin() ? '<span><i style="background:var(--gray)"></i>выплата</span>' : ''}<span><i style="background:var(--green)"></i>готово</span><span><i style="background:var(--red)"></i>просрочено</span></div>
+      </div>
+      <div class="section-h" style="margin-top:20px"><span>${E(weekday(d))}</span>${d !== t ? '<button class="link-btn" data-m="0">Сегодня</button>' : ''}</div>${list}`);
+    $('body').querySelectorAll('[data-d]').forEach((b) => b.addEventListener('click', () => { st.cal.day = b.dataset.d; renderCalendar(); }));
+    $('body').querySelectorAll('[data-m]').forEach((b) => b.addEventListener('click', () => {
+      const k = +b.dataset.m;
+      if (!k) { st.cal = { ym: t.slice(0, 7), day: t }; return renderCalendar(); }
+      const nd = new Date(y, m - 1 + k, 1); st.cal.ym = `${nd.getFullYear()}-${String(nd.getMonth() + 1).padStart(2, '0')}`;
+      st.cal.day = st.cal.ym === t.slice(0, 7) ? t : `${st.cal.ym}-01`; renderCalendar();
+    }));
+    bindCells($('body'));
+  }
+
+  // =====================================================================
+  // ИСТОРИЯ ИЗМЕНЕНИЙ
+  // =====================================================================
+  const FIELD = { amount: 'сумма', expected_date: 'приход', order_date: 'дата заказа', order_no: '№', comment: 'комментарий', status: 'статус',
+    payout_date: 'дата выплаты', basis: 'основание', full_name: 'ФИО', company: 'компания', phone: 'телефон', active: 'доступ',
+    store_id: 'магазин', rep_id: 'представитель', name: 'название', address: 'адрес', ext_key: 'ключ 1С' };
+  function fmtVal(k, v) {
+    if (v == null || v === '') return '—';
+    if (k === 'amount') return A.fmtMoney(v);
+    if (/date$/.test(k)) return A.fmtShort(v);
+    if (k === 'status') return (A.ORD[v] || A.PAY[v])?.label || v;
+    if (k === 'active') return v ? 'включён' : 'отключён';
+    if (k === 'rep_id') return repById(v)?.full_name || '—';
+    if (k === 'store_id') return storeById(v)?.name || '—';
+    return String(v);
+  }
+  // Одна строка истории: кто → что сделал → с чем
+  function histText(e) {
+    const d = e.data || {}, ch = e.changes || {};
+    const who = staffName(e.user_id) || (e.user_id ? 'Сотрудник' : 'Система');
+    const repName = repById(e.rep_id)?.full_name || d.full_name || '';
+    const subj = e.entity === 'orders' ? `заказ ${repName ? '«' + repName + '», ' : ''}${A.fmtMoney(d.amount)}`
+      : e.entity === 'payouts' ? `выплату ${repName ? '«' + repName + '», ' : ''}${A.fmtMoney(d.amount)}`
+      : e.entity === 'reps' ? `представителя «${d.full_name || ''}»` : e.entity === 'stores' ? `магазин «${d.name || ''}»` : '';
+    let what;
+    if (e.action === 'import') what = `загрузил справочник из 1С: новых ${d.added}, изменено ${d.updated}${d.deactivated ? ', отключено ' + d.deactivated : ''}`;
+    else if (e.action === 'insert') what = (e.entity === 'orders' ? 'записал ' : 'добавил ') + subj;
+    else if (e.action === 'delete') what = 'удалил ' + subj;
+    else if (ch.status && Object.keys(ch).length === 1) {
+      const nv = ch.status[1];
+      what = e.entity === 'orders' ? (nv === 'delivered' ? `отметил: пришёл ${subj}` : nv === 'cancelled' ? `отменил ${subj}` : `вернул в ожидание ${subj}`)
+        : `${subj}: ${fmtVal('status', ch.status[0])} → ${fmtVal('status', nv)}`;
+    } else if (ch.active && Object.keys(ch).length === 1) what = `${ch.active[1] ? 'включил' : 'отключил'} доступ: ${repName}`;
+    else what = `изменил ${subj}: ` + Object.entries(ch).map(([k, [a, b]]) => `${FIELD[k] || k} ${fmtVal(k, a)} → ${fmtVal(k, b)}`).join(', ');
+    return { who, what };
+  }
+  const HIST_ICON = { insert: ['＋', 'blue'], update: ['✎', 'gray'], delete: ['✕', 'red'], import: ['⇣', 'green'] };
+  function histCells(rows) {
+    return rows.map((e) => {
+      const { who, what } = histText(e); const [ic, c] = HIST_ICON[e.action] || ['•', 'gray'];
+      const time = new Date(e.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      return `<div class="cell static"><div class="hist-ic c-${c}">${ic}</div><div class="main"><div class="t wrap"><b>${E(who)}</b> ${E(what)}</div>
+        <div class="s">${time}</div></div></div>`;
+    }).join('');
+  }
+  function histGrouped(rows) {
+    let html = '';
+    for (const [day, items] of A.groupBy(rows, (e) => new Date(e.at).toLocaleDateString('sv-SE'))) {
+      const t = A.today(); const label = day === t ? 'Сегодня' : day === A.addDays(t, -1) ? 'Вчера' : weekday(day);
+      html += `<div class="section-h"><span>${E(label)}</span></div><div class="list">${histCells(items)}</div>`;
+    }
+    return html || A.emptyState('Изменений пока нет');
+  }
+  async function loadHistory(filter, box, limit = 100) {
+    let q = sb.from('audit_log').select('*').order('at', { ascending: false }).limit(limit);
+    for (const [k, v] of Object.entries(filter)) q = Array.isArray(v) ? q.in(k, v) : q.eq(k, v);
+    const { data, error } = await q;
+    if (!box.isConnected) return;
+    if (error) { box.innerHTML = A.emptyState('Не удалось загрузить историю'); return; }
+    box.innerHTML = filter.entity_id ? (data.length ? `<div class="list">${histCells(data.slice().reverse())}</div>` : '') : histGrouped(data);
+  }
+  function historySheet() {
+    const api = A.sheet({ title: 'История изменений', left: 'Закрыть', body: `
+      <div class="segmented" id="hseg" style="margin-top:8px"><button data-k="all" class="on">Все</button><button data-k="orders">Заказы</button><button data-k="payouts">Выплаты</button><button data-k="reps">Справочник</button></div>
+      <div id="hbox"><div class="spinner" style="margin:40px auto"></div></div>` });
+    const box = api.body.querySelector('#hbox');
+    const show = (k) => {
+      api.body.querySelectorAll('#hseg button').forEach((b) => b.classList.toggle('on', b.dataset.k === k));
+      box.innerHTML = '<div class="spinner" style="margin:40px auto"></div>';
+      loadHistory(k === 'all' ? {} : { entity: k === 'reps' ? ['reps', 'stores', 'import'] : k }, box, 300);
+    };
+    api.body.querySelector('#hseg').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) show(k); });
+    show('all');
+  }
+
+  // Напоминание: событие в календаре телефона на 9:00 нужного дня
+  function ics(title, date, desc) {
+    const d = date.replace(/-/g, ''), stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+    const esc = (x) => String(x).replace(/[\\,;]/g, (c) => '\\' + c).replace(/\n/g, '\\n');
+    const body = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Sverka//RU', 'BEGIN:VEVENT', `UID:${crypto.randomUUID()}@sverka`, `DTSTAMP:${stamp}`,
+      `DTSTART:${d}T090000`, `DTEND:${d}T091500`, `SUMMARY:${esc(title)}`, `DESCRIPTION:${esc(desc)}`, `URL:${location.href.split('#')[0]}`,
+      'BEGIN:VALARM', 'TRIGGER:-PT0M', 'ACTION:DISPLAY', `DESCRIPTION:${esc(title)}`, 'END:VALARM', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([body], { type: 'text/calendar' })); a.download = `napominanie-${date}.ics`;
+    document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    A.toast('Откройте файл — событие добавится в календарь с напоминанием в 9:00');
   }
 
   // ---------- общая ссылка: график записей на выплату для всех ТП ----------

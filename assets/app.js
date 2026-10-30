@@ -17,7 +17,7 @@
   const TABS = [
     { id: 'orders', label: 'Заказы', icon: SVG('M7 4h10l1 3h3v2h-1.3l-1.6 10.2A2 2 0 0 1 16.1 21H7.9a2 2 0 0 1-2-1.8L4.3 9H3V7h3l1-3Zm-.7 5 1.6 10h8.2l1.6-10H6.3ZM8.4 6l-.3 1h7.8l-.3-1H8.4Z') },
     { id: 'payouts', label: 'Выплаты', admin: true, icon: SVG('M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Zm1 2v8h16V8H4Zm8 1.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM6 10h2v4H6v-4Zm10 0h2v4h-2v-4Z') },
-    { id: 'dir', label: 'Справочник', icon: SVG('M9 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm-7 14c0-3.3 3.1-5 7-5s7 1.7 7 5v1H2v-1Zm2.2-1h9.6c-.5-1.3-2.3-2-4.8-2s-4.3.7-4.8 2ZM16.5 5a3.5 3.5 0 0 1 0 7v-2a1.5 1.5 0 0 0 0-3V5Zm1.3 10c2.5.4 4.2 1.8 4.2 4v2h-3v-2c0-1.3-.6-2.4-1.2-3.1V15Z') },
+    { id: 'dir', label: 'Представители', icon: SVG('M9 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm-7 14c0-3.3 3.1-5 7-5s7 1.7 7 5v1H2v-1Zm2.2-1h9.6c-.5-1.3-2.3-2-4.8-2s-4.3.7-4.8 2ZM16.5 5a3.5 3.5 0 0 1 0 7v-2a1.5 1.5 0 0 0 0-3V5Zm1.3 10c2.5.4 4.2 1.8 4.2 4v2h-3v-2c0-1.3-.6-2.4-1.2-3.1V15Z') },
     { id: 'more', label: 'Ещё', icon: SVG('M5 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z') },
   ];
 
@@ -75,12 +75,14 @@
     await loadAll(); lastLoad = Date.now();
     $('boot').classList.add('hidden');
     ['nav', 'page', 'tabbar'].forEach((id) => $(id).classList.remove('hidden'));
+    document.body.classList.add('app-on');
     $('login').classList.add('hidden');
     renderTabs(); render();
   }
   function showLogin() {
     $('boot').classList.add('hidden');
     ['nav', 'page', 'tabbar'].forEach((id) => $(id).classList.add('hidden'));
+    document.body.classList.remove('app-on');
     $('login').classList.remove('hidden');
   }
 
@@ -115,7 +117,7 @@
   $('nav-plus').addEventListener('click', () => {
     if (st.tab === 'orders') orderForm();
     else if (st.tab === 'payouts') payoutForm();
-    else if (st.tab === 'dir') st.seg.dir === 'reps' ? repForm() : storeForm();
+    else if (st.tab === 'dir') repForm();
     else if (st.tab === 'more' && isAdmin()) staffForm();
   });
 
@@ -140,8 +142,7 @@
   // ЗАКАЗЫ
   // =====================================================================
   function renderOrders() {
-    const wait = st.orders.filter((o) => o.status === 'ordered');
-    frame('Заказы', [['wait', `Ожидаются · ${wait.length}`], ['delivered', 'Пришли'], ['all', 'Все']], 'orders', 'Представитель, магазин, №, сумма');
+    frame('Заказы', [['wait', 'Ожидаются'], ['delivered', 'Пришли'], ['all', 'Все']], 'orders', 'Представитель, №, сумма');
     render.body = renderOrdersBody; renderOrdersBody();
   }
   function orderMatches(o) {
@@ -150,8 +151,6 @@
   }
   function renderOrdersBody() {
     const seg = st.seg.orders;
-    const segBtn = $('seg')?.querySelector('[data-k=wait]');
-    if (segBtn) segBtn.textContent = `Ожидаются · ${st.orders.filter((o) => o.status === 'ordered').length}`;
     let rows = st.orders.filter(orderMatches);
     let html = '';
     if (seg === 'wait') {
@@ -181,12 +180,10 @@
       <div class="list">${items.map(orderCell).join('')}</div>`;
   }
   function orderCell(o) {
-    const r = repById(o.rep_id), s = storeById(o.store_id), v = ordView(o);
-    const when = o.status === 'delivered' ? `пришёл ${A.relDay(o.delivered_at?.slice(0, 10))}`
-      : o.status === 'ordered' && o.expected_date ? `приход ${A.relDay(o.expected_date)}` : '';
-    const sub = [r?.company, s?.name, o.order_no ? '№ ' + o.order_no : null, `заказ ${A.fmtShort(o.order_date)}`, when].filter(Boolean).join(' · ');
+    const r = repById(o.rep_id), v = ordView(o);
+    const when = A.orderWhen({ status: o.status, expected: o.expected_date, delivered_at: o.delivered_at });
     return `<button class="cell" data-id="${o.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
-      <div class="s">${E(sub)}</div></div><div class="r"><div class="amt">${A.fmtMoney(o.amount)}</div>${A.pill(v)}</div><span class="chev">›</span></button>`;
+      <div class="s">${E(when)}</div></div><div class="r"><div class="amt">${A.fmtMoney(o.amount)}</div>${A.pill(v)}</div></button>`;
   }
 
   function orderDetail(id) {
@@ -229,17 +226,21 @@
 
   // Подбор ТП/магазина с возможностью создать новый прямо из формы
   const NEW = '__new__';
-  function pickers(repId, storeId) {
-    return `
-      ${field('Представитель', `<select name="rep_id" required><option value="" disabled ${repId ? '' : 'selected'}>выбрать</option>${opts(st.reps.filter((r) => r.active || r.id === repId), repLabel, repId)}<option value="${NEW}">＋ Новый…</option></select>`)}
-      <div class="hidden" data-new="rep">${field('ФИО', '<input name="new_rep_name" placeholder="Иванов Иван">')}${field('Компания', '<input name="new_rep_company" placeholder="необязательно">')}${field('Телефон', '<input name="new_rep_phone" type="tel" placeholder="необязательно">')}</div>
-      ${field('Магазин', `<select name="store_id"><option value="">—</option>${opts(st.stores, (s) => s.name, storeId)}<option value="${NEW}">＋ Новый…</option></select>`)}
+  const multiStore = () => st.stores.length > 1;
+  function repPicker(repId) {
+    return `${field('Представитель', `<select name="rep_id" required><option value="" disabled ${repId ? '' : 'selected'}>выбрать</option>${opts(st.reps.filter((r) => r.active || r.id === repId), repLabel, repId)}<option value="${NEW}">＋ Новый…</option></select>`)}
+      <div class="hidden" data-new="rep">${field('ФИО', '<input name="new_rep_name" placeholder="Иванов Иван">')}${field('Компания', '<input name="new_rep_company" placeholder="необязательно">')}${field('Телефон', '<input name="new_rep_phone" type="tel" placeholder="необязательно">')}</div>`;
+  }
+  // Магазин: выбор только если их больше одного; иначе подставляется единственный
+  function storePicker(storeId) {
+    if (!multiStore()) return `<input type="hidden" name="store_id" value="${storeId || st.stores[0]?.id || ''}">`;
+    return `${field('Магазин', `<select name="store_id"><option value="">—</option>${opts(st.stores, (s) => s.name, storeId)}<option value="${NEW}">＋ Новый…</option></select>`)}
       <div class="hidden" data-new="store">${field('Название', '<input name="new_store_name" placeholder="Магазин">')}</div>`;
   }
   function bindPickers(api) {
     const f = api.body;
     for (const [sel, key] of [['rep_id', 'rep'], ['store_id', 'store']]) {
-      f.querySelector(`[name=${sel}]`).addEventListener('change', (e) => {
+      f.querySelector(`select[name=${sel}]`)?.addEventListener('change', (e) => {
         const box = f.querySelector(`[data-new=${key}]`); box.classList.toggle('hidden', e.target.value !== NEW);
         if (e.target.value === NEW) box.querySelector('input').focus();
       });
@@ -268,16 +269,18 @@
     const lastStore = o ? o.store_id : (localStorage.getItem('lastStore') || '');
     const api = A.sheet({
       title: o ? 'Изменить заказ' : 'Новый заказ', right: { label: 'Готово', onClick: (api) => save(api) },
-      body: `<div class="section-h"><span>У кого</span></div><div class="list">${pickers(o?.rep_id || preset.rep_id, lastStore && storeById(lastStore) ? lastStore : null)}</div>
-        <div class="section-h"><span>Заказ</span></div><div class="list">
+      body: `<div class="list" style="margin-top:8px">${repPicker(o?.rep_id || preset.rep_id)}
           ${field('Сумма, ₽', `<input name="amount" inputmode="decimal" placeholder="0,00" value="${o ? String(o.amount).replace('.', ',') : ''}" required>`)}
-          ${field('№ заказа', `<input name="order_no" placeholder="необязательно" value="${E(o?.order_no || '')}">`)}
-          ${field('Дата заказа', `<input name="order_date" type="date" value="${o?.order_date || t}" required>`)}
           ${field('Придёт', `<input name="expected_date" type="date" value="${o ? o.expected_date || '' : A.addDays(t, 1)}">`)}
         </div>
         <div class="chips" id="chips">${[['Завтра', 1], ['+2 дня', 2], ['+3 дня', 3], ['Неделя', 7], ['Без даты', null]].map(([l, n]) => `<button type="button" class="chip" data-d="${n}">${l}</button>`).join('')}</div>
-        <div class="section-h"><span>Комментарий</span></div><div class="list">
-          <label class="field"><textarea name="comment" placeholder="Что заказали, условия, контакт">${E(o?.comment || '')}</textarea></label></div>
+        <button class="btn plain" type="button" data-act="more" style="background:none;margin-top:10px;padding:8px">Ещё поля</button>
+        <div id="extra" class="hidden"><div class="list">
+          ${storePicker(o ? o.store_id : (lastStore && storeById(lastStore) ? lastStore : null))}
+          ${field('№ заказа', `<input name="order_no" placeholder="необязательно" value="${E(o?.order_no || '')}">`)}
+          ${field('Дата заказа', `<input name="order_date" type="date" value="${o?.order_date || t}" required>`)}
+          <label class="field"><textarea name="comment" placeholder="Комментарий: что заказали, условия">${E(o?.comment || '')}</textarea></label>
+        </div></div>
         <button class="btn blue" type="button" data-act="save">${o ? 'Сохранить' : 'Записать заказ'}</button>`,
     });
     const f = api.body; bindPickers(api);
@@ -291,7 +294,9 @@
       exp.value = n === 'null' ? '' : A.addDays(f.querySelector('[name=order_date]').value || t, +n); marks();
     });
     exp.addEventListener('change', marks); f.querySelector('[name=order_date]').addEventListener('change', marks); marks();
-    onActs(api, { save: () => save(api) });
+    const showExtra = () => { f.querySelector('#extra').classList.remove('hidden'); f.querySelector('[data-act=more]').classList.add('hidden'); };
+    if (o && (o.order_no || o.comment || o.order_date !== t || multiStore())) showExtra();
+    onActs(api, { save: () => save(api), more: showExtra });
     if (!o) setTimeout(() => f.querySelector('[name=rep_id]').focus(), 350);
 
     async function save(api) {
@@ -326,15 +331,14 @@
     const rows = st.payouts.filter((p) => (seg === 'all' || p.status === seg) && A.matches(st.q.payouts,
       repById(p.rep_id)?.full_name, repById(p.rep_id)?.company, storeById(p.store_id)?.name, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.payout_date)));
     const toPay = st.payouts.filter((p) => p.status === 'to_pay');
-    let html = `<div class="stats">
-      <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--gray)"></span>В списке · ${rows.length}</div><div class="v">${A.fmtMoney(A.sum(rows))}</div></div>
+    let html = `<div class="stats" style="grid-template-columns:1fr">
       <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--blue)"></span>К выплате · ${toPay.length}</div><div class="v">${A.fmtMoney(A.sum(toPay))}</div></div></div>`;
     for (const [ym, items] of A.groupBy(rows, (p) => p.payout_date.slice(0, 7))) {
       html += `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">` +
         items.map((p) => { const r = repById(p.rep_id), s = storeById(p.store_id);
           return `<button class="cell" data-id="${p.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
             <div class="s">${E([A.fmtShort(p.payout_date), p.basis, s?.name].filter(Boolean).join(' · '))}</div></div>
-            <div class="r"><div class="amt">${A.fmtMoney(p.amount)}</div>${A.pill(A.PAY[p.status])}</div><span class="chev">›</span></button>`; }).join('') + '</div>';
+            <div class="r"><div class="amt">${A.fmtMoney(p.amount)}</div>${A.pill(A.PAY[p.status])}</div></button>`; }).join('') + '</div>';
     }
     if (!rows.length) html += A.emptyState(st.q.payouts ? 'Ничего не найдено' : 'Выплат нет', st.q.payouts ? '' : 'Нажмите «+», чтобы добавить запись');
     setBody(html);
@@ -367,7 +371,7 @@
   function payoutForm(p = null, preset = {}) {
     const api = A.sheet({
       title: p ? 'Изменить выплату' : 'Новая выплата', right: { label: 'Готово', onClick: (a) => save(a) },
-      body: `<div class="section-h"><span>Кому</span></div><div class="list">${pickers(p?.rep_id || preset.rep_id, p?.store_id)}</div>
+      body: `<div class="section-h"><span>Кому</span></div><div class="list">${repPicker(p?.rep_id || preset.rep_id)}${storePicker(p?.store_id)}</div>
         <div class="section-h"><span>Выплата</span></div><div class="list">
           ${field('Сумма, ₽', `<input name="amount" inputmode="decimal" placeholder="0,00" value="${p ? String(p.amount).replace('.', ',') : ''}">`)}
           ${field('Дата', `<input name="payout_date" type="date" value="${p?.payout_date || A.today()}">`)}
@@ -399,32 +403,25 @@
   // СПРАВОЧНИК
   // =====================================================================
   function renderDir() {
-    frame('Справочник', [['reps', `Представители · ${st.reps.length}`], ['stores', `Магазины · ${st.stores.length}`]], 'dir', 'Поиск');
+    st.seg.dir = 'reps';
+    frame('Представители', null, 'dir', 'Имя, компания, телефон');
     render.body = renderDirBody; renderDirBody();
   }
   function renderDirBody() {
     const q = st.q.dir; let html = '';
-    if (st.seg.dir === 'reps') {
-      const rows = st.reps.filter((r) => A.matches(q, r.full_name, r.company, r.phone));
-      const groups = A.groupBy(rows, (r) => (r.active ? 'Активные' : 'Отключённые'));
-      for (const g of ['Активные', 'Отключённые']) if (groups.has(g)) {
-        html += `<div class="section-h"><span>${g}</span></div><div class="list">` + groups.get(g).map((r) => {
-          const wait = st.orders.filter((o) => o.rep_id === r.id && o.status === 'ordered');
-          return `<button class="cell" data-rep="${r.id}"><div class="avatar">${E(A.initials(r.full_name))}</div>
-            <div class="main"><div class="t"><b>${E(r.full_name)}</b></div><div class="s">${E([r.company, r.phone].filter(Boolean).join(' · ') || 'Торговый представитель')}</div></div>
-            ${wait.length ? `<div class="r"><span class="pill c-blue">ждём ${wait.length}</span></div>` : ''}<span class="chev">›</span></button>`;
-        }).join('') + '</div>';
-      }
-      if (!rows.length) html = A.emptyState(q ? 'Ничего не найдено' : 'Представителей нет', q ? '' : 'Нажмите «+», чтобы добавить');
-    } else {
-      const rows = st.stores.filter((s) => A.matches(q, s.name, s.address));
-      if (rows.length) html = `<div class="section-h"><span>Магазины</span></div><div class="list">` + rows.map((s) =>
-        `<button class="cell" data-store="${s.id}"><div class="main"><div class="t">${E(s.name)}</div>${s.address ? `<div class="s">${E(s.address)}</div>` : ''}</div><span class="chev">›</span></button>`).join('') + '</div>';
-      else html = A.emptyState(q ? 'Ничего не найдено' : 'Магазинов нет', q ? '' : 'Нажмите «+», чтобы добавить');
+    const rows = st.reps.filter((r) => A.matches(q, r.full_name, r.company, r.phone));
+    const groups = A.groupBy(rows, (r) => (r.active ? 'Активные' : 'Отключённые'));
+    for (const g of ['Активные', 'Отключённые']) if (groups.has(g)) {
+      html += `<div class="section-h"><span>${g}</span></div><div class="list">` + groups.get(g).map((r) => {
+        const wait = st.orders.filter((o) => o.rep_id === r.id && o.status === 'ordered');
+        return `<button class="cell" data-rep="${r.id}"><div class="avatar">${E(A.initials(r.full_name))}</div>
+          <div class="main"><div class="t"><b>${E(r.full_name)}</b></div><div class="s">${E([r.company, r.phone].filter(Boolean).join(' · ') || 'Торговый представитель')}</div></div>
+          ${wait.length ? `<div class="r"><span class="pill c-blue">ждём ${wait.length}</span></div>` : ''}</button>`;
+      }).join('') + '</div>';
     }
+    if (!rows.length) html = A.emptyState(q ? 'Ничего не найдено' : 'Представителей нет', q ? '' : 'Нажмите «+», чтобы добавить');
     setBody(html);
     $('body').querySelectorAll('[data-rep]').forEach((c) => c.addEventListener('click', () => repDetail(c.dataset.rep)));
-    $('body').querySelectorAll('[data-store]').forEach((c) => c.addEventListener('click', () => storeForm(storeById(c.dataset.store))));
   }
 
   const repLink = (rep) => { const t = st.access.find((a) => a.rep_id === rep.id)?.token; return t ? new URL('index.html', location.href).href.split('#')[0] + '#' + t : null; };
@@ -536,19 +533,28 @@
   function renderMore() {
     frame('Ещё', null, null, null);
     render.body = renderMore;
-    let html = `<div class="list" style="margin-top:12px"><div class="cell static"><div class="avatar">${E(A.initials(st.me.full_name))}</div>
-      <div class="main"><div class="t"><b>${E(st.me.full_name)}</b></div><div class="s">${E(st.me.login)} · ${isAdmin() ? 'Администратор' : 'Сотрудник'}</div></div></div></div>`;
+    const roleName = (s) => (s.role === 'admin' ? 'Администратор' : 'Сотрудник');
+    let html = '';
     if (isAdmin()) {
       html += `<div class="section-h"><span>Сотрудники</span></div><div class="list">` + st.staff.map((s) =>
-        `<button class="cell" data-staff="${s.user_id}"><div class="avatar">${E(A.initials(s.full_name))}</div><div class="main"><div class="t">${E(s.full_name)}</div>
-          <div class="s">${E(s.login)} · ${s.role === 'admin' ? 'Администратор' : 'Сотрудник'}${s.active ? '' : ' · отключён'}</div></div><span class="chev">›</span></button>`).join('')
+        `<button class="cell" data-staff="${s.user_id}"><div class="avatar">${E(A.initials(s.full_name))}</div><div class="main"><div class="t">${E(s.full_name)}${s.user_id === st.me.user_id ? ' <span class="value">· вы</span>' : ''}</div>
+          <div class="s">${E(s.login)} · ${roleName(s)}${s.active ? '' : ' · отключён'}</div></div></button>`).join('')
         + `<button class="cell action" data-act-add>＋ Добавить сотрудника</button></div>
-        <div class="footer-note">Сотрудник входит по логину и паролю. Он видит заказы и справочник; выплаты и ссылки представителей ему недоступны.</div>`;
+        <div class="section-h"><span>${st.stores.length > 1 ? 'Магазины' : 'Магазин'}</span></div><div class="list">`
+        + st.stores.map((s) => `<button class="cell" data-store="${s.id}"><div class="main"><div class="t">${E(s.name)}</div>${s.address ? `<div class="s">${E(s.address)}</div>` : ''}</div></button>`).join('')
+        + `<button class="cell action" data-act-store>＋ Добавить магазин</button></div>`;
+    } else {
+      html += `<div class="list" style="margin-top:12px"><div class="cell static"><div class="avatar">${E(A.initials(st.me.full_name))}</div>
+        <div class="main"><div class="t"><b>${E(st.me.full_name)}</b></div><div class="s">${E(st.me.login)} · ${roleName(st.me)}</div></div></div></div>`;
     }
-    html += `<div class="section-h"><span>На iPhone</span></div><div class="list"><div class="cell static"><div class="main"><div class="s" style="white-space:normal">
-      Safari → «Поделиться» → «На экран Домой». Приложение откроется без адресной строки, как обычное.</div></div></div></div>
-      <div class="list" style="margin-top:24px"><button class="cell danger" id="logout">Выйти</button></div>`;
+    if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone) {
+      html += `<div class="section-h"><span>На iPhone</span></div><div class="list"><div class="cell static"><div class="main"><div class="s" style="white-space:normal">
+        Safari → «Поделиться» → «На экран Домой». Приложение откроется без адресной строки, как обычное.</div></div></div></div>`;
+    }
+    html += `<div class="list" style="margin-top:24px"><button class="cell danger" id="logout">Выйти</button></div>`;
     setBody(html);
+    $('body').querySelectorAll('[data-store]').forEach((c) => c.addEventListener('click', () => storeForm(storeById(c.dataset.store))));
+    $('body').querySelector('[data-act-store]')?.addEventListener('click', () => storeForm());
     $('body').querySelectorAll('[data-staff]').forEach((c) => c.addEventListener('click', () => staffForm(st.staff.find((s) => s.user_id === c.dataset.staff))));
     $('body').querySelector('[data-act-add]')?.addEventListener('click', () => staffForm());
     $('logout').addEventListener('click', async () => { await sb.auth.signOut(); st.me = null; showLogin(); });

@@ -117,7 +117,7 @@ button, input, select, textarea { font: inherit; color: inherit; letter-spacing:
 
 /* Поля формы в виде ячеек */
 .field { display: flex; align-items: center; padding: 0 16px; min-height: 44px; position: relative; gap: 12px; }
-.field + .field::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; border-top: .5px solid var(--sep); }
+.field ~ .field::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; border-top: .5px solid var(--sep); }
 .field > span { width: 118px; flex-shrink: 0; }
 .field input, .field select, .field textarea { flex: 1; min-width: 0; border: 0; background: none; outline: none; padding: 11px 0;
   text-align: right; font-size: 17px; }
@@ -150,3 +150,18 @@ button, input, select, textarea { font: inherit; color: inherit; letter-spacing:
 .login h1 { text-align: center; font-size: 28px; margin: 0 0 4px; } .login p { text-align: center; color: var(--label2); margin: 0 0 24px; }
 .spinner { width: 28px; height: 28px; margin: 80px auto; border: 3px solid var(--fill); border-top-color: var(--gray); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Компьютер: вкладки — левая боковая панель, как в приложениях Mac */
+@media (min-width: 900px) {
+  body.app-on { padding-left: 232px; }
+  body.app-on .tabbar { top: 0; right: auto; width: 232px; border-top: 0; border-right: .5px solid var(--sep);
+    padding: calc(16px + var(--safe-t)) 10px 16px; background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  body.app-on .tabbar-inner { flex-direction: column; gap: 2px; max-width: none; }
+  body.app-on .tabbar-inner::before { content: "Заказы и выплаты"; font-size: 13px; font-weight: 600; color: var(--label2); padding: 0 12px 10px; }
+  body.app-on .tabbar button { flex: none; flex-direction: row; justify-content: flex-start; gap: 10px; padding: 8px 12px;
+    font-size: 15px; font-weight: 500; color: var(--label); border-radius: 8px; }
+  body.app-on .tabbar button svg { width: 22px; height: 22px; color: var(--blue); }
+  body.app-on .tabbar button.on { background: var(--fill); color: var(--label); }
+  body.app-on .page { padding-bottom: 48px; }
+  body.app-on .sheet { left: 232px; }
+}

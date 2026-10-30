@@ -25,7 +25,7 @@
 
   // ---------- статусы ----------
   const PAY = {
-    accrued: { label: 'Начислено', c: 'orange' },
+    accrued: { label: 'Начислено', c: 'gray' },
     to_pay: { label: 'К выплате', c: 'blue' },
     paid: { label: 'Выплачено', c: 'green' },
   };
@@ -38,9 +38,17 @@
   function orderView(o) {
     if (o.status === 'ordered' && o.expected) {
       if (o.expected < today()) return { label: 'Просрочен', c: 'red', key: 'late' };
-      if (o.expected === today()) return { label: 'Сегодня', c: 'orange', key: 'today' };
+      if (o.expected === today()) return { label: 'Сегодня', c: 'gray', key: 'today' };
     }
     return { ...ORD[o.status], key: o.status };
+  }
+  // Одна короткая фраза о сроке заказа для строки списка
+  function orderWhen(o) {
+    if (o.status === 'cancelled') return 'отменён';
+    if (o.status === 'delivered') return 'пришёл ' + relDay(o.delivered_at?.slice(0, 10));
+    if (!o.expected) return 'без даты прихода';
+    const late = Math.round((new Date(today() + 'T12:00:00') - new Date(o.expected + 'T12:00:00')) / 864e5);
+    return late > 0 ? `просрочен на ${late} дн.` : 'приход ' + relDay(o.expected);
   }
   const pill = (v) => `<span class="pill c-${v.c}">${esc(v.label)}</span>`;
 
@@ -119,5 +127,5 @@
   function emptyState(title, text = '') { return `<div class="empty"><div class="big">${esc(title)}</div>${esc(text)}</div>`; }
 
   window.App = { sb, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches,
-    PAY, ORD, orderView, pill, groupBy, toast, sheet, navScroll, searchBox, bindSearch, emptyState, ICON };
+    PAY, ORD, orderView, orderWhen, pill, groupBy, toast, sheet, navScroll, searchBox, bindSearch, emptyState, ICON };
 })();

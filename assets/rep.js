@@ -48,7 +48,7 @@
     }
     return [
       [null, 'Всего', 'gray', payouts],
-      ['accrued', 'Начислено', 'orange', payouts.filter((p) => p.status === 'accrued')],
+      ['accrued', 'Начислено', 'gray', payouts.filter((p) => p.status === 'accrued')],
       ['to_pay', 'К выплате', 'blue', payouts.filter((p) => p.status === 'to_pay')],
       ['paid', 'Выплачено', 'green', payouts.filter((p) => p.status === 'paid')],
     ];
@@ -80,11 +80,9 @@
       html += `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">`;
       for (const r of items) {
         if (st.tab === 'orders') {
-          const sub = [r.order_no ? '№ ' + r.order_no : null, A.fmtShort(r.date),
-            r.status === 'delivered' ? 'пришёл ' + A.relDay(r.delivered_at?.slice(0, 10)) : r.expected && r.status === 'ordered' ? 'приход ' + A.relDay(r.expected) : null].filter(Boolean).join(' · ');
-          html += cell(r.id, r.store || 'Заказ', sub, r.amount, r.view);
+          html += cell(r.id, r.store || 'Заказ от ' + A.fmtShort(r.date), A.orderWhen(r), r.amount, r.view);
         } else {
-          html += cell(r.id, r.basis || r.store || 'Выплата', [A.fmtShort(r.date), r.store && r.basis ? r.store : null].filter(Boolean).join(' · '), r.amount, A.PAY[r.status]);
+          html += cell(r.id, r.basis || 'Выплата', A.fmtShort(r.date), r.amount, A.PAY[r.status]);
         }
       }
       html += '</div>';
@@ -94,7 +92,7 @@
   }
   const cell = (id, t, s, amount, view) => `<button class="cell" data-id="${id}">
     <div class="main"><div class="t"><b>${A.esc(t)}</b></div><div class="s">${A.esc(s)}</div></div>
-    <div class="r"><div class="amt">${A.fmtMoney(amount)}</div>${A.pill(view)}</div><span class="chev">›</span></button>`;
+    <div class="r"><div class="amt">${A.fmtMoney(amount)}</div>${A.pill(view)}</div></button>`;
 
   const info = (rows) => `<div class="list">${rows.filter(([, v]) => v).map(([k, v]) =>
     `<div class="cell static"><div class="main">${A.esc(k)}</div><div class="value" style="text-align:right;white-space:normal">${A.esc(v)}</div></div>`).join('')}</div>`;

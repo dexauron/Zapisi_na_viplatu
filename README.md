@@ -29,13 +29,14 @@
 - Деньги: `numeric(12,2)`, суммирование в копейках.
 - Даты/статусы: `delivered_at` и `paid_at` ставят триггеры. «Просрочен» вычисляется: дата прихода прошла, статус «Ожидается».
 
-## Первый запуск
-1. **Settings → Pages → Source: GitHub Actions**.
-2. Открыть `…/app.html`. Владелец `dexauron@gmail.com` один раз регистрируется (см. ниже) и входит — профиль админа создаётся автоматически.
-3. «Ещё» → «Добавить сотрудника» → передать логин и пароль.
-4. На iPhone: Safari → «Поделиться» → «На экран Домой».
+## Запуск и выкладка
+Всё по шагам — `docs/DEPLOY.md`. Правила для ИИ-исполнителей — `AGENTS.md`, решения — `docs/DECISIONS.md`, состояние — `docs/HANDOFF.md`.
 
-Регистрация владельца: Supabase → Authentication → Users → Add user → `dexauron@gmail.com`, пароль, Auto Confirm.
+## Проверки (GitHub Actions)
+- **CI** (`.github/workflows/ci.yml`): синтаксис JS и состав сайта; миграции на чистой базе Supabase + тест прав (31 проверка);
+  `deno check`/`deno lint` функции; gitleaks по всей истории.
+- **Выкладка** (`.github/workflows/pages.yml`): сайт + `config.js` из переменных репозитория.
+- **Dependabot**: еженедельное обновление закреплённых действий.
 
 ## Скилы для ИИ-агентов
 `.agents/skills/`: `supabase`, `supabase-postgres-best-practices` (`npx skills add supabase/agent-skills`).

@@ -28,11 +28,14 @@ jobs:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
         run: |
+          # убрать случайные пробелы, переносы и хвост «/» или «/rest/v1» при вставке
+          SUPABASE_URL=$(printf '%s' "$SUPABASE_URL" | tr -d '[:space:]' | sed -E 's#/rest/v1/?$##; s#/+$##')
+          SUPABASE_PUBLISHABLE_KEY=$(printf '%s' "$SUPABASE_PUBLISHABLE_KEY" | tr -d '[:space:]')
           if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_PUBLISHABLE_KEY" ]; then
             echo "::error::Нет переменных SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY (Settings → Secrets and variables → Actions → Variables)"
             exit 1
           fi
-          case "$SUPABASE_URL" in https://*.supabase.co) ;; *) echo "::error::SUPABASE_URL должен быть https://<ref>.supabase.co"; exit 1;; esac
+          case "$SUPABASE_URL" in https://*.supabase.co) ;; *) echo "::error::SUPABASE_URL должен быть https://<ref>.supabase.co, сейчас начинается с «${SUPABASE_URL:0:30}»"; exit 1;; esac
           case "$SUPABASE_PUBLISHABLE_KEY" in sb_publishable_*) ;; *) echo "::error::Нужен публичный ключ sb_publishable_…, не секретный"; exit 1;; esac
           mkdir _site
           cp -r index.html app.html list.html admin.html sw.js manifest.webmanifest assets vendor .nojekyll _site/

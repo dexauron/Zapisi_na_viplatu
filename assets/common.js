@@ -128,6 +128,15 @@
     return api;
   }
 
+  // ---------- оформление: light | dark | auto ----------
+  function setTheme(t) {
+    document.documentElement.dataset.theme = t;
+    try { localStorage.setItem('theme', t); } catch { /* приватный режим */ }
+    const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#000000' : '#f2f2f7');
+  }
+  const getTheme = () => document.documentElement.dataset.theme || 'light';
+
   // ---------- отклик: короткая вибрация (Android); на iPhone браузер её не поддерживает ----------
   function haptic(ms = 8) { try { navigator.vibrate?.(ms); } catch { /* нет поддержки */ } }
 
@@ -238,5 +247,5 @@
   function emptyState(title, text = '') { return `<div class="empty"><div class="big">${esc(title)}</div>${esc(text)}</div>`; }
 
   window.App = { sb, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches,
-    PAY, ORD, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, navScroll, searchBox, bindSearch, emptyState, ICON };
+    PAY, ORD, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON };
 })();

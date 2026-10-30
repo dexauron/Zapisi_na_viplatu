@@ -614,7 +614,9 @@
       html += `<div class="section-h"><span>На iPhone</span></div><div class="list"><div class="cell static"><div class="main"><div class="s" style="white-space:normal">
         Safari → «Поделиться» → «На экран Домой». Приложение откроется без адресной строки, как обычное.</div></div></div></div>`;
     }
-    html += `<div class="list" style="margin-top:24px"><button class="cell danger" id="logout">Выйти</button></div>`;
+    html += `<div class="section-h"><span>Оформление</span></div><div class="segmented" id="theme">${[['light', 'Светлое'], ['dark', 'Тёмное'], ['auto', 'Как в системе']]
+      .map(([k, l]) => `<button data-k="${k}" class="${A.getTheme() === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="list" style="margin-top:24px"><button class="cell danger" id="logout">Выйти</button></div>`;
     setBody(html);
     $('body').querySelectorAll('[data-store]').forEach((c) => c.addEventListener('click', () => storeForm(storeById(c.dataset.store))));
     $('body').querySelector('[data-act-store]')?.addEventListener('click', () => storeForm());
@@ -623,6 +625,7 @@
     $('body').querySelectorAll('[data-shared]').forEach((c) => c.addEventListener('click', () => sharedLink(c.dataset.shared)));
     $('body').querySelectorAll('[data-staff]').forEach((c) => c.addEventListener('click', () => staffForm(st.staff.find((s) => s.user_id === c.dataset.staff))));
     $('body').querySelector('[data-act-add]')?.addEventListener('click', () => staffForm());
+    $('theme').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) { A.haptic(); A.setTheme(k); renderMore(); } });
     $('logout').addEventListener('click', async () => { await sb.auth.signOut(); st.me = null; showLogin(); });
   }
 

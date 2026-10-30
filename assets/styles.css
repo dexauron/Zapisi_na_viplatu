@@ -5,13 +5,18 @@
   --sep: rgba(60,60,67,.29); --bar: rgba(249,249,249,.8);
   --blue: #007aff; --green: #34c759; --orange: #ff9500; --red: #ff3b30; --gray: #8e8e93; --indigo: #5856d6;
   --r: 10px; --safe-b: env(safe-area-inset-bottom, 0px); --safe-t: env(safe-area-inset-top, 0px);
-  color-scheme: light dark;
+  color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root { --bg: #000; --bg2: #1c1c1e; --bg3: #2c2c2e; --fill: rgba(118,118,128,.24);
+/* Оформление: по умолчанию светлое; тёмное — по выбору в «Ещё» или «как в системе» */
+:root[data-theme="dark"] { --bg: #000; --bg2: #1c1c1e; --bg3: #2c2c2e; --fill: rgba(118,118,128,.24);
     --label: #fff; --label2: rgba(235,235,245,.6); --label3: rgba(235,235,245,.3);
     --sep: rgba(84,84,88,.6); --bar: rgba(29,29,31,.8);
-    --blue: #0a84ff; --green: #30d158; --orange: #ff9f0a; --red: #ff453a; --indigo: #5e5ce6; }
+    --blue: #0a84ff; --green: #30d158; --orange: #ff9f0a; --red: #ff453a; --indigo: #5e5ce6; color-scheme: dark; }
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] { --bg: #000; --bg2: #1c1c1e; --bg3: #2c2c2e; --fill: rgba(118,118,128,.24);
+    --label: #fff; --label2: rgba(235,235,245,.6); --label3: rgba(235,235,245,.3);
+    --sep: rgba(84,84,88,.6); --bar: rgba(29,29,31,.8);
+    --blue: #0a84ff; --green: #30d158; --orange: #ff9f0a; --red: #ff453a; --indigo: #5e5ce6; color-scheme: dark; }
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html { -webkit-text-size-adjust: 100%; }
@@ -51,7 +56,8 @@ body { -webkit-user-select: none; user-select: none; overscroll-behavior-y: none
 .segmented button { flex: 1; border: 0; background: none; padding: 6px 4px; border-radius: 7px; font-size: 13px;
   font-weight: 500; cursor: pointer; white-space: nowrap; }
 .segmented button.on { background: var(--bg2); box-shadow: 0 3px 8px rgba(0,0,0,.12), 0 3px 1px rgba(0,0,0,.04); font-weight: 600; }
-@media (prefers-color-scheme: dark) { .segmented button.on { background: #636366; } }
+:root[data-theme="dark"] .segmented button.on { background: #636366; }
+@media (prefers-color-scheme: dark) { :root[data-theme="auto"] .segmented button.on { background: #636366; } }
 
 /* Карточки итогов */
 .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 6px 0 14px; }

@@ -118,4 +118,10 @@
 
   function render() { renderStats(); renderList(); }
   render();
+
+  // Вернулись на вкладку через минуту и больше — показать свежие данные
+  let shownAt = Date.now();
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && Date.now() - shownAt > 60000 && !document.querySelector('.sheet')) location.reload();
+  });
 })();

@@ -72,7 +72,7 @@
     }
     st.me = me;
     if (!isAdmin() && st.tab === 'payouts') st.tab = 'orders';
-    await loadAll();
+    await loadAll(); lastLoad = Date.now();
     $('boot').classList.add('hidden');
     ['nav', 'page', 'tabbar'].forEach((id) => $(id).classList.remove('hidden'));
     $('login').classList.add('hidden');
@@ -599,6 +599,20 @@
       } catch (e) { api.busy(false); A.toast(e.message, true); }
     }
   }
+
+  // ---------- автообновление: данные меняют несколько сотрудников с разных устройств ----------
+  let lastLoad = 0, refreshing = false;
+  async function refresh(force = false) {
+    if (!st.me || refreshing || document.hidden) return;
+    if (!force && Date.now() - lastLoad < 15000) return;
+    if (document.querySelector('.sheet')) return;                       // открыта форма — не мешаем
+    if (document.activeElement?.matches('input, textarea, select')) return; // идёт ввод
+    refreshing = true;
+    try { await loadAll(); lastLoad = Date.now(); render(); } finally { refreshing = false; }
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  window.addEventListener('focus', () => refresh());
+  setInterval(() => refresh(true), 60000);
 
   // ---------- старт ----------
   sb.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT' && st.me) { st.me = null; showLogin(); } });

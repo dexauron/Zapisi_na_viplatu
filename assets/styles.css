@@ -284,3 +284,9 @@ mark { background: none; color: inherit; font-weight: 700; }
 .segmented.in-field button { font-size: 15px; padding: 6px 8px; }
 .segmented button.on[data-v="to_pay"] { color: var(--orange); }
 .segmented button.on[data-v="paid"] { color: var(--green); }
+
+/* 1С: документы и предупреждения */
+.warn { color: var(--red); }
+.footer-note.warn { color: var(--red); }
+.cell.doc.k-pay .amt, .cell.doc.k-ret .amt { color: var(--green); font-weight: 500; }
+.cell.doc.deleted .t, .cell.doc.deleted .amt { text-decoration: line-through; color: var(--label3); }

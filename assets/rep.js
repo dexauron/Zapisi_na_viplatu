@@ -15,6 +15,17 @@
 
   const orders = data.orders.map((o) => ({ ...o, view: A.orderView(o) }));
   const payouts = data.payouts;
+  // Документы 1С за полгода: приходы, оплаты, возвраты
+  const shortNum = (n) => String(n || '').replace(/^\D+/, '').replace(/^0+(?=\d)/, '') || String(n || '');
+  const DOC = { in: 'Накладная', pay: 'Оплата', ret: 'Возврат' };
+  const docs = (data.docs || []).map((d) => ({ ...d, date: d.at.slice(0, 10),
+    view: d.kind === 'in' ? (Number(d.open) > 0 ? { label: 'Не оплачено', c: 'orange' } : { label: 'Оплачено', c: 'green' })
+      : d.kind === 'pay' ? { label: 'Оплата', c: 'green' } : { label: 'Возврат', c: 'orange' } }));
+  const actual = (o) => {
+    if (o.actual == null) return '';
+    const d = A.toCents(o.actual) - A.toCents(o.amount);
+    return `пришло ${A.fmtMoney(o.actual)}${d ? ` (${d > 0 ? '+' : '−'}${A.fmtMoney(Math.abs(d) / 100)})` : ''}`;
+  };
   const st = { tab: 'orders', filter: null, q: '' };
   document.getElementById('nav-title').textContent = data.rep.full_name;
   document.title = data.rep.full_name;
@@ -22,7 +33,7 @@
   page.innerHTML = `
     <div class="large-title">${A.esc(data.rep.full_name)}</div>
     <div class="subtitle">${A.esc(data.rep.company || 'Торговый представитель')}</div>
-    <div class="segmented" id="seg"><button data-t="orders" class="on">Заказы · ${orders.length}</button><button data-t="payouts">Выплаты · ${payouts.length}</button></div>
+    <div class="segmented" id="seg"><button data-t="orders" class="on">Заказы · ${orders.length}</button><button data-t="payouts">Выплаты · ${payouts.length}</button>${docs.length ? `<button data-t="docs">Накладные · ${docs.length}</button>` : ''}</div>
     ${A.searchBox('q', 'Магазин, №, сумма, комментарий')}
     <div class="stats" id="stats"></div>
     <div id="list"></div>`;
@@ -46,16 +57,24 @@
         [null, 'Все заказы', 'gray', orders.filter((o) => o.status !== 'cancelled')],
       ];
     }
+    if (st.tab === 'docs') {
+      return [
+        ['in', 'Приход', 'blue', docs.filter((d) => d.kind === 'in')],
+        ['pay', 'Оплачено', 'green', docs.filter((d) => d.kind === 'pay')],
+        ['ret', 'Возвраты', 'orange', docs.filter((d) => d.kind === 'ret')],
+        ...(data.debt != null ? [[null, 'Долг магазина', 'gray', [], Math.max(0, Number(data.debt))]] : []),
+      ];
+    }
     return [
       ['to_pay', 'Не оплачено', 'orange', payouts.filter((p) => p.status !== 'paid')],
       ['paid', 'Оплачено', 'green', payouts.filter((p) => p.status === 'paid')],
     ];
   }
   function renderStats() {
-    $('stats').innerHTML = statsDef().map(([k, label, c, rows]) => `
+    $('stats').innerHTML = statsDef().map(([k, label, c, rows, value]) => `
       <button class="stat ${st.filter === k && k ? 'on' : ''}" data-k="${k ?? ''}">
-        <div class="k"><span class="dot" style="background:var(--${c})"></span>${label} · ${rows.length}</div>
-        <div class="v">${A.fmtMoney(A.sum(rows))}</div></button>`).join('');
+        <div class="k"><span class="dot" style="background:var(--${c})"></span>${label}${value == null ? ' · ' + rows.length : ''}</div>
+        <div class="v">${A.fmtMoney(value ?? A.sum(rows))}</div></button>`).join('');
     $('stats').querySelectorAll('.stat').forEach((b) => b.addEventListener('click', () => {
       const k = b.dataset.k || null; st.filter = st.filter === k ? null : k; render();
     }));
@@ -65,6 +84,9 @@
     if (st.tab === 'orders') {
       return orders.filter((o) => (!st.filter || (st.filter === 'wait' ? o.status === 'ordered' : o.view.key === st.filter))
         && A.matches(st.q, o.store, o.order_no, o.comment, o.amount, A.fmtMoney(o.amount), A.fmtDate(o.date), o.view.label));
+    }
+    if (st.tab === 'docs') {
+      return docs.filter((d) => (!st.filter || d.kind === st.filter) && A.matches(st.q, d.num, shortNum(d.num), d.in_no, DOC[d.kind] || d.title, d.amount, A.fmtMoney(d.amount), A.fmtDate(d.date)));
     }
     return payouts.filter((p) => (!st.filter || (st.filter === 'paid') === (p.status === 'paid'))
       && A.matches(st.q, p.invoice_no, p.store, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.date), A.payView(p.status).label));
@@ -78,7 +100,10 @@
       html += `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">`;
       for (const r of items) {
         if (st.tab === 'orders') {
-          html += cell(r.id, r.store || 'Заказ от ' + A.fmtShort(r.date), A.orderWhen(r), r.amount, r.view);
+          html += cell(r.id, r.store || 'Заказ от ' + A.fmtShort(r.date), [A.orderWhen(r), actual(r)].filter(Boolean).join(' · '), r.amount, r.view);
+        } else if (st.tab === 'docs') {
+          html += cell(r.id, `${DOC[r.kind] || r.title} № ${shortNum(r.num)}`,
+            [A.fmtShort(r.date), r.kind === 'in' && Number(r.open) > 0 ? `не оплачено ${A.fmtMoney(r.open)}` : ''].filter(Boolean).join(' · '), r.amount, r.view);
         } else {
           html += cell(r.id, r.invoice_no ? 'Накладная № ' + r.invoice_no : r.basis || 'Выплата',
             [A.fmtShort(r.date), r.invoice_no && r.basis].filter(Boolean).join(' · '), r.amount, A.payView(r.status), r.status === 'paid' ? 'pay paid' : 'pay');
@@ -97,13 +122,22 @@
     `<div class="cell static"><div class="main">${A.esc(k)}</div><div class="value" style="text-align:right;white-space:normal">${A.esc(v)}</div></div>`).join('')}</div>`;
 
   function detail(id) {
+    if (st.tab === 'docs') {
+      const d = docs.find((x) => x.id === id);
+      A.sheet({ title: DOC[d.kind] || d.title, left: 'Закрыть', body: `
+        <div class="hero"><div class="amount">${A.fmtMoney(d.amount)}</div><div class="who">${A.pill(d.view)}</div></div>
+        <div class="section-h"><span>Детали</span></div>
+        ${info([['Документ', `${d.title} № ${d.num}`], ['Дата', A.fmtDate(d.date)], ['Входящий №', d.in_no],
+          ['Не оплачено', d.kind === 'in' && Number(d.open) > 0 ? A.fmtMoney(d.open) : null]])}` });
+      return;
+    }
     if (st.tab === 'orders') {
       const o = orders.find((x) => x.id === id);
       A.sheet({ title: 'Заказ', left: 'Закрыть', body: `
         <div class="hero"><div class="amount">${A.fmtMoney(o.amount)}</div><div class="who">${A.pill(o.view)}</div></div>
         <div class="section-h"><span>Детали</span></div>
         ${info([['Магазин', o.store], ['№ заказа', o.order_no], ['Дата заказа', A.fmtDate(o.date)],
-          ['Ожидаемый приход', A.fmtDate(o.expected)], ['Пришёл', A.fmtDate(o.delivered_at)], ['Комментарий', o.comment]])}` });
+          ['Ожидаемый приход', A.fmtDate(o.expected)], ['Пришёл', A.fmtDate(o.delivered_at)], ['По накладной', actual(o).replace(/^пришло /, '')], ['Комментарий', o.comment]])}` });
     } else {
       const p = payouts.find((x) => x.id === id);
       A.sheet({ title: 'Выплата', left: 'Закрыть', body: `

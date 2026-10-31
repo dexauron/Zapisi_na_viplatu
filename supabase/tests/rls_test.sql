@@ -134,6 +134,26 @@ begin
   perform set_config('role', 'authenticated', true);
   log := log || pg_temp.chk('40 invoice trimmed, in rep cabinet', j -> 'payouts' -> 0 ->> 'invoice_no', '77/1');
 
+  -- Документы 1С: загрузка без копий, остаток по накладной, права
+  perform set_config('request.jwt.claims', json_build_object('sub', adm, 'role', 'authenticated')::text, true);
+  j := public.import_docs('00000000-0000-0000-0000-0000000000d1', array['inc', 'dec', 'basis'],
+    '[{"title":"Приходная накладная","num":"ПФ1","at":"2026-09-01T10:00:00","kontr":"Поставщик Тест","inc":1000,"dec":0},
+      {"title":"Расходный кассовый ордер","num":"ПФ2","at":"2026-09-02T10:00:00","kontr":"Поставщик Тест","inc":0,"dec":400,
+       "basis":"Приходная накладная|ПФ1|2026"}]'::jsonb);
+  log := log || pg_temp.chk('41 docs added, new supplier', (j ->> 'added') || '/' || (j ->> 'reps_added'), '2/1');
+  j := public.import_docs('00000000-0000-0000-0000-0000000000d2', array['inc', 'dec'],
+    '[{"title":"Приходная накладная","num":"ПФ1","at":"2026-09-01T10:00:00","kontr":"Поставщик Тест","inc":1000,"dec":0}]'::jsonb);
+  log := log || pg_temp.chk('42 reimport same, no copy', (j ->> 'same') || '/' || (select count(*) from public.docs where num = 'ПФ1'), '1/1');
+  j := public.finish_import('00000000-0000-0000-0000-0000000000d1', '[]'::jsonb);
+  perform public.reconcile(array(select jsonb_array_elements_text((j::jsonb) -> 'reps')::uuid));
+  select open_amount::text into v from public.docs where num = 'ПФ1';
+  log := log || pg_temp.chk('43 open = invoice - linked payment', v, '600.00');
+  perform set_config('request.jwt.claims', json_build_object('sub', emp, 'role', 'authenticated')::text, true);
+  select count(*) into n from public.docs;
+  log := log || pg_temp.chk('44 employee sees no docs', n::text, '0');
+  begin perform public.import_docs(gen_random_uuid(), array['inc'], '[]'::jsonb); log := log || '45 FAIL employee imported docs'::text;
+  exception when others then log := log || ('45 ok employee import denied: ' || sqlerrm); end;
+
   raise exception E'РЕЗУЛЬТАТ\n%', array_to_string(log, E'\n');
 end
 $test$;

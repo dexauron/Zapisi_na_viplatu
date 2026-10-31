@@ -290,3 +290,11 @@ mark { background: none; color: inherit; font-weight: 700; }
 .footer-note.warn { color: var(--red); }
 .cell.doc.k-pay .amt, .cell.doc.k-ret .amt { color: var(--green); font-weight: 500; }
 .cell.doc.deleted .t, .cell.doc.deleted .amt { text-decoration: line-through; color: var(--label3); }
+
+/* Накладные 1С в поиске «Выплат»: действия прямо в строке */
+.cell.inv { cursor: default; align-items: flex-start; }
+.cell.inv:active { background: var(--bg2); }
+.inv-acts { display: flex; gap: 8px; margin-top: 8px; }
+.inv-acts:empty { display: none; }
+.inv-acts .chip { padding: 10px 16px; font-weight: 600; color: var(--blue); }
+.inv-acts .chip.on-green { background: var(--green); color: #fff; }

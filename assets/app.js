@@ -437,12 +437,59 @@
       html += `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">` +
         items.map((p) => payoutCell(p)).join('') + '</div>';
     }
-    if (!rows.length) html += A.emptyState(st.q.payouts ? 'Ничего не найдено' : 'Выплат нет', st.q.payouts ? '' : 'Нажмите «+», чтобы добавить запись');
+    const q = (st.q.payouts || '').trim();
+    if (!rows.length && !q) html += A.emptyState('Выплат нет', 'Нажмите «+», чтобы добавить запись');
+    if (q) html += '<div id="inv-found"></div>';
     setBody(html);
     $('body').querySelectorAll('.stat[data-seg]').forEach((b) => b.addEventListener('click', () => {
       st.seg.payouts = st.seg.payouts === b.dataset.seg ? 'all' : b.dataset.seg; renderPayouts();
     }));
     bindCells($('body'));
+    if (q) findInvoices(q, rows.length);
+  }
+  // Поиск накладной 1С по номеру прямо в «Выплатах»: сразу «Записать» или «Оплачено»
+  let findSeq = 0;
+  async function findInvoices(q, localCount) {
+    const seq = ++findSeq, box = $('inv-found');
+    if (!box) return;
+    box.innerHTML = '<div class="spinner" style="margin:20px auto;width:20px;height:20px"></div>';
+    const { data, error } = await sb.rpc('find_invoices', { p_q: q });
+    if (seq !== findSeq || !box.isConnected) return;
+    if (error) { box.innerHTML = isNetErr(error) ? '' : `<div class="footer-note warn">${E(humanError(error))}</div>`; return; }
+    if (!data.length) { box.innerHTML = localCount ? '' : A.emptyState('Ничего не найдено', 'Ни записей, ни накладных 1С с таким номером'); return; }
+    box.innerHTML = `<div class="section-h"><span>Накладные в 1С · ${data.length}</span></div><div class="list">${data.map((d) => {
+      const r = repById(d.rep_id), open = Number(d.open) > 0;
+      const state = d.pay_status ? A.payView(d.pay_status) : open ? { label: 'Не оплачено в 1С', c: 'orange' } : { label: 'Оплачено в 1С', c: 'green' };
+      // в 1С уже оплачена и записи нет — делать нечего
+      const acts = d.pay_status === 'paid' || (!open && !d.pay_id) ? '' : d.pay_id
+        ? `<button class="chip on-green" data-inv-paid="${d.id}">Оплачено</button>`
+        : `<button class="chip" data-inv-rec="${d.id}">Записать</button><button class="chip on-green" data-inv-paid="${d.id}">Оплачено</button>`;
+      return `<div class="cell inv" data-inv="${d.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
+          <div class="s">${E([A.docNo({ ...d, kind: 'in' }), A.fmtShort(d.at.slice(0, 10)), open ? 'не оплачено ' + A.fmtMoney(d.open) : ''].filter(Boolean).join(' · '))}</div>
+          <div class="inv-acts">${acts}</div></div>
+        <div class="r"><div class="amt">${A.fmtMoney(d.inc)}</div>${A.pill(state)}</div></div>`;
+    }).join('')}</div>`;
+    const byId = new Map(data.map((d) => [d.id, d]));
+    box.querySelectorAll('[data-inv-rec]').forEach((b) => b.addEventListener('click', () => {
+      const d = byId.get(b.dataset.invRec);
+      payoutForm(null, { rep_id: d.rep_id, doc_id: d.id, amount: Number(d.open) > 0 ? Number(d.open) : Number(d.inc), invoice_no: d.in_no || '' });
+    }));
+    box.querySelectorAll('[data-inv-paid]').forEach((b) => b.addEventListener('click', () => invoicePaid(byId.get(b.dataset.invPaid))));
+  }
+  // «Оплачено» по накладной: есть запись — отметить её; нет — создать запись сразу оплаченной (с «Вернуть»)
+  async function invoicePaid(d) {
+    A.haptic();
+    if (d.pay_id && st.payouts.some((p) => p.id === d.pay_id)) { await changeStatus('payouts', d.pay_id, 'paid', 'Оплачено'); return; }
+    try {
+      const amount = Number(d.open) > 0 ? Number(d.open) : Number(d.inc);
+      const r = await write('payouts', 'insert', null, { rep_id: d.rep_id, doc_id: d.id, amount, invoice_no: d.in_no || null, payout_date: A.today(), status: 'paid' });
+      st.payouts.sort((a, b) => b.payout_date.localeCompare(a.payout_date));
+      if (st.unrec?.n > 0 && Number(d.open) > 0 && !d.pay_id) { st.unrec.n--; st.unrec.sum = Math.max(0, st.unrec.sum - amount); }
+      rerender();
+      A.toast('Оплачено · запись создана' + (r.offline ? ' · отправится при появлении сети' : ''), false, { label: 'Вернуть', run: async () => {
+        try { await write('payouts', 'delete', r.id); rerender(); A.haptic(); } catch (e) { A.toast(humanError(e), true); }
+      } });
+    } catch (e) { A.toast(humanError(e), true); }
   }
   // Строка выплаты: кружок слева — как в «Напоминаниях»: пустой оранжевый = запись, зелёный с галочкой = оплачено
   const payNote = (p) => [p.invoice_no && '№ ' + p.invoice_no, p.basis].filter(Boolean).join(' · ');

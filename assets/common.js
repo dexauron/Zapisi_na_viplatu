@@ -180,6 +180,31 @@
     const late = Math.round((new Date(today() + 'T12:00:00') - new Date(o.expected + 'T12:00:00')) / 864e5);
     return late > 0 ? `просрочен на ${late} дн.` : 'приход ' + relDay(o.expected);
   }
+  // ---------- порядок дат: сегодня → завтра → будущие → прошедшие (свежие сначала) ----------
+  // Прошедшие старше 14 дней собираются по месяцам. dateOf(x) → 'ГГГГ-ММ-ДД' или пусто.
+  function dayGroups(rows, dateOf) {
+    const t = today(), t1 = addDays(t, 1), y = addDays(t, -1), t14 = addDays(t, -14);
+    const keyOf = (d) => (!d ? 'none' : d >= t14 ? d : 'm' + d.slice(0, 7));
+    const map = new Map();
+    for (const x of rows) { const k = keyOf(dateOf(x)); if (!map.has(k)) map.set(k, []); map.get(k).push(x); }
+    const rank = (k) => (k === t ? 0 : k === 'none' ? 2 : k[0] !== 'm' && k > t ? 1 : 3);
+    const cap = (s) => s[0].toUpperCase() + s.slice(1);
+    const title = (k) => {
+      if (k === 'none') return 'Без даты';
+      if (k[0] === 'm') return fmtMonth(k.slice(1));
+      if (k === t) return 'Сегодня'; if (k === t1) return 'Завтра'; if (k === y) return 'Вчера';
+      return cap(new Date(k + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' }));
+    };
+    return [...map.entries()]
+      .sort(([a], [b]) => rank(a) - rank(b) || (rank(a) === 1 ? a.localeCompare(b) : b.localeCompare(a)))
+      .map(([k, items]) => ({ key: k, title: title(k), items, past: rank(k) === 3, today: k === t }));
+  }
+  // Месяцы в том же порядке: текущий → будущие → прошедшие
+  function monthOrder(a, b) {
+    const m = today().slice(0, 7), r = (x) => (x === m ? 0 : x > m ? 1 : 2);
+    return r(a) - r(b) || (r(a) === 1 ? a.localeCompare(b) : b.localeCompare(a));
+  }
+
   const pill = (v) => `<span class="pill c-${v.c}">${esc(v.label)}</span>`;
 
   // ---------- группировка ----------
@@ -376,5 +401,5 @@
   function emptyState(title, text = '') { return `<div class="empty"><div class="big">${esc(title)}</div>${esc(text)}</div>`; }
 
   window.App = { sb, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches, rank, mark, canon,
-    PAY, payView, docNo, ORD, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON };
+    PAY, payView, docNo, ORD, dayGroups, monthOrder, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON };
 })();

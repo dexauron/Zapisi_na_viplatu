@@ -60,7 +60,8 @@
     return { kind: null, ...m };
   }
 
-  const AMOUNT_HEADS = ['Сумма документа прих.', 'Сумма документа в валюте договора', 'Сумма документа', 'Сумма'];
+  // Сумма по договору — та, что уходит во взаиморасчёты; «прих.» у части накладных другая (тара и т. п.)
+  const AMOUNT_HEADS = ['Сумма документа в валюте договора', 'Сумма документа', 'Сумма документа прих.', 'Сумма'];
   // Список документов (Приходная накладная, Расходный кассовый ордер, Возврат поставщику …)
   function parseList(aoa, info) {
     const head = (aoa[info.head] || []).map(clean);
@@ -79,7 +80,7 @@
       if (!d) continue;
       const kontr = clean(r[c.kontr]); const amount = num(r[c.amount]);
       if (d.title !== title || !kontr || amount == null || amount < 0) { skipped++; continue; } // расход на нужды магазина, ККМ и т. п.
-      const row = { title: d.title, num: d.num, at: d.at, kontr, inc: inc ? amount : 0, dec: inc ? 0 : amount };
+      const row = { title: d.title, num: d.num, at: d.at, kontr, inc: inc ? amount : 0, dec: inc ? 0 : amount, src: 'l' };
       if (c.retail >= 0) row.retail = num(r[c.retail]);
       if (c.in_no >= 0) { const x = clean(r[c.in_no]); row.in_no = !x || /ручн/i.test(x) ? null : x; }
       if (c.pay_due >= 0) row.pay_due = date(r[c.pay_due]);
@@ -105,7 +106,7 @@
       if (d) {
         const inc = num(r[ci]) || 0, dec = num(r[cd]) || 0;
         if (!kontr || inc < 0 || dec < 0) { skipped++; continue; }
-        rows.push({ title: d.title, num: d.num, at: d.at, kontr, inc, dec });
+        rows.push({ title: d.title, num: d.num, at: d.at, kontr, inc, dec, src: 'v' });
       } else if (/договор/i.test(a)) continue;
       else kontr = a;
     }
@@ -141,7 +142,7 @@
     for (const p of parsed.filter((x) => x.info?.kind === 'vzaimo')) for (const r of p.rows) byKey.set(keyOf(r), { row: { ...r }, fields: new Set(p.fields), money: true });
     for (const p of parsed.filter((x) => x.info?.kind === 'list')) for (const r of p.rows) {
       const k = keyOf(r), cur = byKey.get(k);
-      if (cur) { const { inc, dec } = cur.row; Object.assign(cur.row, r, { inc, dec }); p.fields.forEach((f) => cur.fields.add(f)); }
+      if (cur) { const { inc, dec } = cur.row; Object.assign(cur.row, r, { inc, dec, src: 'v' }); p.fields.forEach((f) => cur.fields.add(f)); }
       else byKey.set(k, { row: { ...r }, fields: new Set(p.fields) });
     }
     const groups = new Map();

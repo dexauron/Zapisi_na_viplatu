@@ -101,7 +101,11 @@
     const actBtn = st.tab === 'docs' && window.Act && docs.some((d) => d.inc != null) ? '<button class="btn plain" type="button" id="act" style="margin:0 0 4px">Акт сверки · PDF</button>' : '';
     if (!rows.length) { $('list').innerHTML = actBtn + A.emptyState(st.q ? 'Ничего не найдено' : 'Записей нет', st.q ? 'Измените запрос' : ''); $('act')?.addEventListener('click', openAct); return; }
     let html = actBtn;
-    for (const [ym, items] of A.groupBy(rows, (r) => r.date.slice(0, 7))) {
+    // сегодня/текущий месяц — первыми, затем будущие, прошедшие — в конце (новые сверху)
+    const t = A.today(), rk = (d) => (d === t ? 0 : d > t ? 1 : 2);
+    const byDay = (a, b) => rk(a.date.slice(0, 10)) - rk(b.date.slice(0, 10)) || (rk(a.date.slice(0, 10)) === 1 ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date));
+    const months = [...A.groupBy([...rows].sort(byDay), (r) => r.date.slice(0, 7))].sort((a, b) => A.monthOrder(a[0], b[0]));
+    for (const [ym, items] of months) {
       html += `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">`;
       for (const r of items) {
         if (st.tab === 'orders') {

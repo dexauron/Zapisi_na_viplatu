@@ -169,6 +169,17 @@ begin
   select count(*) into n from public.payouts where id = v::uuid and received_at is not null;
   log := log || pg_temp.chk('49 unpaid resets receipt', n::text, '0');
 
+  -- Сумма из «Взаиморасчётов» главнее суммы из списка документов; список дополняет подробности
+  perform set_config('request.jwt.claims', json_build_object('sub', adm, 'role', 'authenticated')::text, true);
+  j := public.import_docs(gen_random_uuid(), array['inc', 'dec'],
+    '[{"title":"Приходная накладная","num":"ПФ1","at":"2026-09-01T10:00:00","kontr":"Поставщик Тест","inc":1000,"dec":0,"src":"v"}]'::jsonb);
+  j := public.import_docs(gen_random_uuid(), array['inc', 'dec', 'in_no'],
+    '[{"title":"Приходная накладная","num":"ПФ1","at":"2026-09-01T10:00:00","kontr":"Поставщик Тест","inc":900,"dec":0,"in_no":"55","src":"l"}]'::jsonb);
+  select inc::text || '/' || coalesce(in_no, '-') into v from public.docs where num = 'ПФ1';
+  log := log || pg_temp.chk('50 list keeps settlement sum, adds in_no', v, '1000.00/55');
+  select count(*) into n from public.audit_log where entity = 'docs' and changes ? 'in_no';
+  log := log || pg_temp.chk('51 filling empty field is not history', n::text, '0');
+
   raise exception E'РЕЗУЛЬТАТ\n%', array_to_string(log, E'\n');
 end
 $test$;

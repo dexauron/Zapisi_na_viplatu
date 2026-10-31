@@ -43,18 +43,36 @@
     return s[0].toUpperCase() + s.slice(1);
   }
 
+  // Сегодня → завтра → будущие даты → прошедшие (в конце). Внутри даты: ИП с 2+ записями — веткой.
+  const coKey = (c) => String(c || '').toLowerCase().replace(/ё/g, 'е').replace(/[\s.,«»"']+/g, '');
+  const row = (r, child, past) => `<button class="cell ${child ? 'child' : ''}" data-rep="${r.rep_id}"><div class="main"><div class="t"><b>${A.esc(r.rep)}</b></div>
+      <div class="s">${A.esc([child ? '' : r.company, r.invoice_no && '№ ' + r.invoice_no, past ? A.fmtShort(r.date) : null].filter(Boolean).join(' · ') || ' ')}</div></div>
+      <div class="r"><div class="amt">${A.fmtMoney(r.amount)}</div>${A.pill(A.payView(r.status))}</div></button>`;
+  function tree(items, past) {
+    const nodes = new Map();
+    for (const r of items) { const k = r.company ? 'c:' + coKey(r.company) : 'r:' + r.id; if (!nodes.has(k)) nodes.set(k, { co: r.company, items: [] }); nodes.get(k).items.push(r); }
+    const flat = [];
+    for (const n of nodes.values()) {
+      if (n.co && n.items.length >= 2) flat.push({ name: n.co, n });
+      else for (const r of n.items) flat.push({ name: r.rep, r });
+    }
+    flat.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    return flat.map((x) => (x.r ? row(x.r, false, past)
+      : `<div class="tgrp"><button type="button" class="cell co-h"><div class="avatar co-ic">${A.esc(A.initials(x.n.co.replace(/^(ИП|ООО|ОАО|ЗАО|ТД)\s+/i, '')))}</div>
+          <div class="main"><div class="t"><b>${A.esc(x.n.co)}</b></div><div class="s">${new Set(x.n.items.map((r) => r.rep_id)).size} торг. · ${x.n.items.length} ${plural(x.n.items.length)}</div></div>
+          <div class="r"><div class="amt">${A.fmtMoney(A.sum(x.n.items))}</div></div><span class="chev">›</span></button>${x.n.items.map((r) => row(r, true, past)).join('')}</div>`)).join('');
+  }
   function render() {
     const shown = rows.filter((r) => A.matches(q, r.rep, r.company, r.invoice_no));
     if (!shown.length) { $('list').innerHTML = A.emptyState(q ? 'Никого не нашли' : 'Записей нет', q ? 'Измените запрос' : 'Новые записи появятся здесь'); return; }
-    let html = '';
-    for (const [title, items] of A.groupBy(shown, (r) => dayTitle(r.date))) {
-      html += `<div class="section-h ${title === 'Прошедшие даты' ? 'red' : ''}"><span>${A.esc(title)}</span><span>${items.length}</span></div><div class="list">`
-        + items.map((r) => `<button class="cell" data-rep="${r.rep_id}"><div class="main"><div class="t"><b>${A.esc(r.rep)}</b></div>
-            <div class="s">${A.esc([r.company, r.invoice_no && '№ ' + r.invoice_no, title === 'Прошедшие даты' ? A.fmtShort(r.date) : null].filter(Boolean).join(' · ') || ' ')}</div></div>
-            <div class="r"><div class="amt">${A.fmtMoney(r.amount)}</div>${A.pill(A.payView(r.status))}</div></button>`).join('') + '</div>';
+    let html = '', sep = false;
+    for (const g of A.dayGroups(shown, (r) => r.date)) {
+      if (g.past && !sep) { html += '<div class="past-sep"><span>Прошедшие даты</span></div>'; sep = true; }
+      html += `<div class="section-h ${g.past ? 'red' : ''} ${g.today ? 'today' : ''}"><span>${A.esc(g.title)}</span><span>${g.items.length}</span></div><div class="list">${tree(g.items, g.past)}</div>`;
     }
     $('list').innerHTML = html;
     $('list').querySelectorAll('[data-rep]').forEach((c) => c.addEventListener('click', () => card(c.dataset.rep)));
+    $('list').querySelectorAll('.co-h').forEach((h) => h.addEventListener('click', () => { h.closest('.tgrp').classList.toggle('closed'); A.haptic(); }));
   }
 
   function cardDate(d) {

@@ -307,6 +307,21 @@ mark { background: none; color: inherit; font-weight: 700; }
 .cell.child::before { left: 44px; }
 .cell.child .avatar { width: 30px; height: 30px; font-size: 12px; }
 .chips.sib { margin: 0 0 6px; }
+.cell.co-h .co-ic { border-radius: 10px; background: rgba(88,86,214,.14); background: color-mix(in srgb, var(--indigo) 14%, transparent); color: var(--indigo); width: 34px; height: 34px; font-size: 13px; }
+.cell.co-h .chev { transition: transform .2s; margin-left: 2px; font-size: 22px; transform: rotate(90deg); }
+.tgrp.closed > .co-h .chev { transform: none; }
+.tgrp.closed > .child { display: none; }
+.tgrp { position: relative; }
+.tgrp > .cell { position: relative; z-index: 1; }
+.tgrp + .cell::before, .cell + .tgrp > .co-h::before, .tgrp + .tgrp > .co-h::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; border-top: .5px solid var(--sep); }
+.tgrp > .child + .child::before, .tgrp > .co-h + .child::before { left: 44px; }
+/* Сегодня — первым, прошедшие — в конце, после разделителя */
+.section-h.today { color: var(--blue); font-weight: 600; }
+.past-sep { display: flex; align-items: center; gap: 10px; margin: 28px 16px 0; color: var(--label2); font-size: 13px; text-transform: uppercase; letter-spacing: .02em; }
+.past-sep::before, .past-sep::after { content: ""; flex: 1; border-top: 1px solid var(--sep); }
+.past-sep + .section-h { margin-top: 10px; }
+/* Поля, рассчитанные из выбранных накладных */
+.field.ro input { color: var(--label2); }
 
 /* «Получил» */
 .got { color: var(--green); }

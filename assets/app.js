@@ -906,23 +906,25 @@
         return { ok: r.ok, got, ms: performance.now() - t0 };
       } catch { return { ok: false, got, ms: performance.now() - t0 }; } finally { clearTimeout(to); }
     }
-    const res = (m) => (m.ok ? `${kb(m.got)} за ${sec(m.ms)}` : m.got ? `оборвалось на ${kb(m.got)}` : 'нет ответа');
+    // разовый сбой (например, сразу после включения/выключения VPN) — повторить один раз
+    const measure2 = async (url, opts) => { const m = await measure(url, opts); if (m.ok) return m; const r = await measure(url, opts); r.retried = true; return r; };
+    const res = (m) => (m.ok ? `${kb(m.got)} за ${sec(m.ms)}${m.retried ? ' (со 2-й попытки)' : ''}` : m.got ? `оборвалось на ${kb(m.got)}` : `нет ответа (${sec(m.ms)})`);
     rows.push(row('Интернет', navigator.onLine ? 'есть' : 'нет', navigator.onLine));
     show(row('Сайт (GitHub)', 'проверяю…'));
-    const site = await measure(new URL(`vendor/supabase.js?v=nc${Date.now()}`, location.href).href);
+    const site = await measure2(new URL(`vendor/supabase.js?v=nc${Date.now()}`, location.href).href);
     rows.push(row('Сайт (GitHub)', res(site), site.ok));
     show(row('База: короткий ответ', 'проверяю…'));
     const { SUPABASE_URL, SUPABASE_KEY } = window.APP_CONFIG;
-    const small = await measure(`${SUPABASE_URL}/auth/v1/health`, { headers: { apikey: SUPABASE_KEY } });
+    const small = await measure2(`${SUPABASE_URL}/auth/v1/health`, { headers: { apikey: SUPABASE_KEY } });
     rows.push(row('База: короткий ответ', res(small), small.ok));
     show(row('База: все данные', 'проверяю…'));
     const token = (await sb.auth.getSession()).data.session?.access_token;
-    const big = await measure(`${SUPABASE_URL}/rest/v1/rpc/app_bootstrap`, { method: 'POST',
+    const big = await measure2(`${SUPABASE_URL}/rest/v1/rpc/app_bootstrap`, { method: 'POST',
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token || SUPABASE_KEY}`, 'Content-Type': 'application/json' }, body: '{}' });
     rows.push(row('База: все данные', res(big), big.ok)); show();
-    note.textContent = site.ok && small.ok && big.ok ? 'Связь в порядке: данные доходят полностью.'
-      : site.ok && small.ok ? 'Короткие ответы проходят, большие обрываются: провайдер ограничивает Cloudflare, через который работает база. С VPN должно работать. Сообщите — подключу обходной путь.'
-      : site.ok ? 'Сайт открывается, а база не отвечает: провайдер ограничивает доступ к ней.' : 'Нет связи с интернетом или сайтом.';
+    note.textContent = big.ok ? (small.ok ? 'Связь в порядке: данные доходят полностью.' : 'Данные доходят полностью; короткий запрос не прошёл — разовый сбой сети.')
+      : small.ok ? 'Короткие ответы проходят, большие обрываются: провайдер ограничивает Cloudflare, через который работает база. Сообщите — подключу обходной путь.'
+      : site.ok ? 'Сайт открывается, а база не отвечает: провайдер ограничивает доступ к ней. Сообщите — подключу обходной путь.' : 'Нет связи с интернетом или сайтом.';
   }
 
   // ---------- быстрые действия свайпом по строке ----------

@@ -741,6 +741,8 @@
       html += `<div class="section-h"><span>На iPhone</span></div><div class="list"><div class="cell static"><div class="main"><div class="s" style="white-space:normal">
         Safari → «Поделиться» → «На экран Домой». Приложение откроется без адресной строки, как обычное.</div></div></div></div>`;
     }
+    html += `<div class="section-h"><span>Связь</span></div><div class="list"><button class="cell action" id="netcheck">Проверить связь</button></div>
+      <div class="footer-note">Включите и выключите VPN и проверьте оба раза: видно, доходят ли данные без VPN.</div>`;
     html += `<div class="section-h"><span>Оформление</span></div><div class="segmented" id="theme">${[['light', 'Светлое'], ['dark', 'Тёмное'], ['auto', 'Как в системе']]
       .map(([k, l]) => `<button data-k="${k}" class="${A.getTheme() === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div class="list" style="margin-top:24px"><button class="cell danger" id="logout">Выйти</button></div>`;
@@ -752,6 +754,7 @@
     $('body').querySelectorAll('[data-shared]').forEach((c) => c.addEventListener('click', () => sharedLink(c.dataset.shared)));
     $('body').querySelectorAll('[data-staff]').forEach((c) => c.addEventListener('click', () => staffForm(st.staff.find((s) => s.user_id === c.dataset.staff))));
     $('body').querySelector('[data-act-add]')?.addEventListener('click', () => staffForm());
+    $('netcheck').addEventListener('click', netCheck);
     $('theme').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) { A.haptic(); A.setTheme(k); renderMore(); } });
     $('logout').addEventListener('click', async () => {
       if (queue.length && !(await confirmAct(`Не отправлено изменений: ${queue.length}. При выходе они пропадут. Выйти?`))) return;
@@ -883,6 +886,44 @@
   // Закрыли вкладку раньше 5 секунд — удаление всё равно выполняется
   window.addEventListener('pagehide', () => { for (const [id, p] of pendingDeletes) { clearTimeout(p.timer); commitDelete(p.table, id, p.row, p.i); } });
   function rerender() { if (!st.me) return; (render.body || render)(); renderTabs(); }
+
+  // ---------- проверка связи ----------
+  // Сайт приходит с GitHub, данные — из Supabase через Cloudflare. Часть провайдеров РФ обрывает
+  // соединения с Cloudflare после ~16 КБ: маленькие запросы проходят, большие — нет. Проверка показывает это на месте.
+  async function netCheck() {
+    const api = A.sheet({ title: 'Проверка связи', left: 'Закрыть', body: '<div class="list" id="nc" style="margin-top:8px"></div><div class="footer-note" id="ncn"></div>' });
+    const box = api.body.querySelector('#nc'), note = api.body.querySelector('#ncn'), rows = [];
+    const row = (k, v, ok) => `<div class="cell static"><div class="main">${E(k)}</div><div class="value" style="text-align:right;color:var(--${ok == null ? 'label2' : ok ? 'green' : 'red'})">${E(v)}</div></div>`;
+    const show = (extra = '') => { box.innerHTML = rows.join('') + extra; };
+    const kb = (n) => Math.max(1, Math.round(n / 1024)) + ' КБ', sec = (ms) => (ms / 1000).toFixed(1).replace('.', ',') + ' с';
+    async function measure(url, opts = {}) {
+      const t0 = performance.now(), ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 15000);
+      let got = 0;
+      try {
+        const r = await fetch(url, { ...opts, signal: ctl.signal, cache: 'no-store' });
+        const rd = r.body.getReader();
+        for (;;) { const { done, value } = await rd.read(); if (done) break; got += value.length; }
+        return { ok: r.ok, got, ms: performance.now() - t0 };
+      } catch { return { ok: false, got, ms: performance.now() - t0 }; } finally { clearTimeout(to); }
+    }
+    const res = (m) => (m.ok ? `${kb(m.got)} за ${sec(m.ms)}` : m.got ? `оборвалось на ${kb(m.got)}` : 'нет ответа');
+    rows.push(row('Интернет', navigator.onLine ? 'есть' : 'нет', navigator.onLine));
+    show(row('Сайт (GitHub)', 'проверяю…'));
+    const site = await measure(new URL(`vendor/supabase.js?v=nc${Date.now()}`, location.href).href);
+    rows.push(row('Сайт (GitHub)', res(site), site.ok));
+    show(row('База: короткий ответ', 'проверяю…'));
+    const { SUPABASE_URL, SUPABASE_KEY } = window.APP_CONFIG;
+    const small = await measure(`${SUPABASE_URL}/auth/v1/health`, { headers: { apikey: SUPABASE_KEY } });
+    rows.push(row('База: короткий ответ', res(small), small.ok));
+    show(row('База: все данные', 'проверяю…'));
+    const token = (await sb.auth.getSession()).data.session?.access_token;
+    const big = await measure(`${SUPABASE_URL}/rest/v1/rpc/app_bootstrap`, { method: 'POST',
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token || SUPABASE_KEY}`, 'Content-Type': 'application/json' }, body: '{}' });
+    rows.push(row('База: все данные', res(big), big.ok)); show();
+    note.textContent = site.ok && small.ok && big.ok ? 'Связь в порядке: данные доходят полностью.'
+      : site.ok && small.ok ? 'Короткие ответы проходят, большие обрываются: провайдер ограничивает Cloudflare, через который работает база. С VPN должно работать. Сообщите — подключу обходной путь.'
+      : site.ok ? 'Сайт открывается, а база не отвечает: провайдер ограничивает доступ к ней.' : 'Нет связи с интернетом или сайтом.';
+  }
 
   // ---------- быстрые действия свайпом по строке ----------
   const quickStatus = changeStatus;

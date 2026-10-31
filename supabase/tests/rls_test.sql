@@ -154,6 +154,21 @@ begin
   begin perform public.import_docs(gen_random_uuid(), array['inc'], '[]'::jsonb); log := log || '45 FAIL employee imported docs'::text;
   exception when others then log := log || ('45 ok employee import denied: ' || sqlerrm); end;
 
+  -- «Получил»: ставит только представитель по своей ссылке, только у оплаченной записи
+  perform set_config('request.jwt.claims', json_build_object('sub', adm, 'role', 'authenticated')::text, true);
+  select id::text into v from public.payouts where rep_id = rep and status = 'paid' limit 1;
+  update public.payouts set received_at = now() where id = v::uuid;
+  select count(*) into n from public.payouts where id = v::uuid and received_at is not null;
+  log := log || pg_temp.chk('46 staff cannot set received_at', n::text, '0');
+  perform set_config('role', 'anon', true);
+  log := log || pg_temp.chk('47 other rep token cannot confirm',
+    (public.confirm_receipt((select token from public.rep_access where rep_id = rep2), v::uuid) is null)::text, 'true');
+  log := log || pg_temp.chk('48 rep confirms receipt', (public.confirm_receipt(tok, v::uuid) is not null)::text, 'true');
+  perform set_config('role', 'authenticated', true);
+  update public.payouts set status = 'to_pay' where id = v::uuid;
+  select count(*) into n from public.payouts where id = v::uuid and received_at is not null;
+  log := log || pg_temp.chk('49 unpaid resets receipt', n::text, '0');
+
   raise exception E'РЕЗУЛЬТАТ\n%', array_to_string(log, E'\n');
 end
 $test$;

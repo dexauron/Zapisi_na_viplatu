@@ -109,7 +109,7 @@
   function subseq(prep, h) {
     if (prep.length !== 1) return false;
     return prep[0].some((v) => {
-      if (v.length < 3 || v.includes(' ')) return false;
+      if (v.length < 3 || v.includes(' ') || /^\d+$/.test(v)) return false; // цифры (номера, суммы) — только точно
       for (const x of h.words) {
         if (x[0] !== v[0]) continue;
         let i = 1; for (let j = 1; j < x.length && i < v.length; j++) if (x[j] === v[i]) i++;

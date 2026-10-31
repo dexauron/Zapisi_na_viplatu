@@ -298,3 +298,22 @@ mark { background: none; color: inherit; font-weight: 700; }
 .inv-acts:empty { display: none; }
 .inv-acts .chip { padding: 10px 16px; font-weight: 600; color: var(--blue); }
 .inv-acts .chip.on-green { background: var(--green); color: #fff; }
+
+/* Дерево «ИП → торговые» */
+.cell.co .co-ic { border-radius: 10px; background: rgba(88,86,214,.14); background: color-mix(in srgb, var(--indigo) 14%, transparent); color: var(--indigo); }
+.cell.co .chev { transition: transform .2s; margin-left: 2px; font-size: 22px; }
+.cell.co.open .chev { transform: rotate(90deg); }
+.cell.child { padding-left: 44px; }
+.cell.child::before { left: 44px; }
+.cell.child .avatar { width: 30px; height: 30px; font-size: 12px; }
+.chips.sib { margin: 0 0 6px; }
+
+/* «Получил» */
+.got { color: var(--green); }
+
+/* Накладные 1С в форме выплаты */
+.cell.inv-pick { border: 0; font: inherit; color: inherit; text-align: left; }
+.cell.inv-pick:disabled { opacity: .45; }
+.cell.inv-pick .pick-ic { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--label3); flex-shrink: 0; position: relative; }
+.cell.inv-pick.on .pick-ic { background: var(--blue); border-color: var(--blue); }
+.cell.inv-pick.on .pick-ic::after { content: ""; position: absolute; left: 6.5px; top: 2.5px; width: 5px; height: 10px; border: solid #fff; border-width: 0 2.5px 2.5px 0; transform: rotate(45deg); }

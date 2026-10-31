@@ -20,7 +20,11 @@
   const DOC = { in: 'Накладная', pay: 'Оплата', ret: 'Возврат' };
   const docs = (data.docs || []).map((d) => ({ ...d, date: d.at.slice(0, 10),
     view: d.kind === 'in' ? (Number(d.open) > 0 ? { label: 'Не оплачено', c: 'orange' } : { label: 'Оплачено', c: 'green' })
-      : d.kind === 'pay' ? { label: 'Оплата', c: 'green' } : { label: 'Возврат', c: 'orange' } }));
+      : d.kind === 'pay' ? { label: 'Оплата', c: 'green' } : d.kind === 'ret' ? { label: 'Возврат', c: 'orange' } : { label: 'Прочее', c: 'gray' } }));
+  // Акт сверки: документы есть за полгода, долг до них = общий долг по 1С минус их сумма
+  const actBase = data.debt != null ? Number(data.debt) - docs.reduce((a, d) => a + Number(d.inc || 0) - Number(d.dec || 0), 0) : 0;
+  const openAct = () => window.Act.open({ party: [data.rep.company, data.rep.full_name].filter(Boolean).join(' · '),
+    docs: docs.filter((d) => d.inc != null), base: actBase, minDate: docs.reduce((m, d) => (!m || d.date < m ? d.date : m), null) });
   const actual = (o) => {
     if (o.actual == null) return '';
     const d = A.toCents(o.actual) - A.toCents(o.amount);
@@ -94,8 +98,9 @@
 
   function renderList() {
     const rows = rowsNow();
-    if (!rows.length) { $('list').innerHTML = A.emptyState(st.q ? 'Ничего не найдено' : 'Записей нет', st.q ? 'Измените запрос' : ''); return; }
-    let html = '';
+    const actBtn = st.tab === 'docs' && window.Act && docs.some((d) => d.inc != null) ? '<button class="btn plain" type="button" id="act" style="margin:0 0 4px">Акт сверки · PDF</button>' : '';
+    if (!rows.length) { $('list').innerHTML = actBtn + A.emptyState(st.q ? 'Ничего не найдено' : 'Записей нет', st.q ? 'Измените запрос' : ''); $('act')?.addEventListener('click', openAct); return; }
+    let html = actBtn;
     for (const [ym, items] of A.groupBy(rows, (r) => r.date.slice(0, 7))) {
       html += `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">`;
       for (const r of items) {
@@ -106,13 +111,15 @@
             [A.fmtShort(r.date), r.kind === 'in' && Number(r.open) > 0 ? `не оплачено ${A.fmtMoney(r.open)}` : ''].filter(Boolean).join(' · '), r.amount, r.view);
         } else {
           html += cell(r.id, r.invoice_no ? 'Накладная № ' + r.invoice_no : r.basis || 'Выплата',
-            [A.fmtShort(r.date), r.invoice_no && r.basis].filter(Boolean).join(' · '), r.amount, A.payView(r.status), r.status === 'paid' ? 'pay paid' : 'pay');
+            [A.fmtShort(r.date), r.invoice_no && r.basis, r.status === 'paid' ? (r.received_at ? 'получено ✓' : 'подтвердите получение') : ''].filter(Boolean).join(' · '),
+            r.amount, A.payView(r.status), r.status === 'paid' ? 'pay paid' : 'pay');
         }
       }
       html += '</div>';
     }
     $('list').innerHTML = html;
     $('list').querySelectorAll('.cell').forEach((c) => c.addEventListener('click', () => detail(c.dataset.id)));
+    $('act')?.addEventListener('click', openAct);
   }
   const cell = (id, t, s, amount, view, cls = '') => `<button class="cell ${cls}" data-id="${id}">
     <div class="main"><div class="t"><b>${A.esc(t)}</b></div><div class="s">${A.esc(s)}</div></div>
@@ -140,10 +147,20 @@
           ['Ожидаемый приход', A.fmtDate(o.expected)], ['Пришёл', A.fmtDate(o.delivered_at)], ['По накладной', actual(o).replace(/^пришло /, '')], ['Комментарий', o.comment]])}` });
     } else {
       const p = payouts.find((x) => x.id === id);
-      A.sheet({ title: 'Выплата', left: 'Закрыть', body: `
+      const canConfirm = p.status === 'paid' && !p.received_at;
+      const api = A.sheet({ title: 'Выплата', left: 'Закрыть', body: `
         <div class="hero"><div class="amount ${p.status === 'paid' ? 'paid' : ''}">${A.fmtMoney(p.amount)}</div><div class="who">${A.pill(A.payView(p.status))}</div></div>
         <div class="section-h"><span>Детали</span></div>
-        ${info([['№ накладной', p.invoice_no], ['Дата', A.fmtDate(p.date)], ['Магазин', p.store], ['Основание', p.basis], ['Оплачено', A.fmtDate(p.paid_at)], ['Комментарий', p.comment]])}` });
+        ${info([['№ накладной', p.invoice_no], ['Дата', A.fmtDate(p.date)], ['Магазин', p.store], ['Основание', p.basis], ['Оплачено', A.fmtDate(p.paid_at)],
+          ['Вы получили', p.received_at ? A.fmtDate(p.received_at) : null], ['Комментарий', p.comment]])}
+        ${canConfirm ? `<button class="btn green" type="button" id="got">Получил ${A.esc(A.fmtMoney(p.amount))}</button>
+          <div class="footer-note">Нажмите, когда деньги у вас: магазин увидит подтверждение.</div>` : ''}` });
+      api.body.querySelector('#got')?.addEventListener('click', async (e) => {
+        e.target.disabled = true;
+        const { data: at, error: err } = await A.sb.rpc('confirm_receipt', { p_token: token, p_id: p.id });
+        if (err || !at) { e.target.disabled = false; return A.toast(err ? 'Нет связи — попробуйте ещё раз' : 'Не удалось подтвердить', true); }
+        p.received_at = at; A.haptic(); api.close(); A.toast('Получение подтверждено'); render();
+      });
     }
   }
 

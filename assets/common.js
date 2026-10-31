@@ -5,6 +5,9 @@
   const sb = window.APP_ANON
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
     : window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  // Кабинет представителя по логину: обычная сессия (на странице со ссылкой основной клиент — анонимный)
+  let repSb = null;
+  const repClient = () => repSb || (repSb = window.APP_ANON ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : sb);
 
   // ---------- форматирование ----------
   const money = new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', minimumFractionDigits: 2 });
@@ -400,6 +403,6 @@
 
   function emptyState(title, text = '') { return `<div class="empty"><div class="big">${esc(title)}</div>${esc(text)}</div>`; }
 
-  window.App = { sb, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches, rank, mark, canon,
+  window.App = { sb, repClient, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches, rank, mark, canon,
     PAY, payView, docNo, ORD, dayGroups, monthOrder, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON };
 })();

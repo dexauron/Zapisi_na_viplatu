@@ -1,4 +1,5 @@
-// Кабинет торгового представителя: только просмотр своих заказов и выплат по персональной ссылке
+// Кабинет торгового представителя: только свои заказы, выплаты и документы 1С —
+// по персональной ссылке (#токен) или по логину и паролю, которые выдал администратор
 (async function () {
   const A = window.App;
   const page = document.getElementById('page');
@@ -6,12 +7,66 @@
 
   // Токен — в #фрагменте ссылки (не уходит на сервер и в логи); ?t= — запасной вариант
   const token = (location.hash.replace(/^#/, '') || new URLSearchParams(location.search).get('t') || '').trim();
-  const fail = (t, s) => (page.innerHTML = A.emptyState(t, s));
-  if (!token) return fail('Ссылка неполная', 'Попросите администратора прислать персональную ссылку.');
+  const fail = (t, s, extra = '') => (page.innerHTML = A.emptyState(t, s) + extra);
+  const REP_DOMAIN = 'rep.zapisi.app', STAFF_DOMAIN = 'staff.zapisi.app';
+  // По ссылке — анонимно, как раньше; по логину — своя сессия (общая с приложением сотрудников на этом устройстве)
+  const rb = token ? A.sb : A.repClient();
+  let data, error;
+  if (token) {
+    ({ data, error } = await A.sb.rpc('get_rep_data', { p_token: token }));
+    if (error) return fail('Нет связи', 'Проверьте интернет и обновите страницу.');
+    if (!data) return fail('Ссылка недействительна', 'Доступ отключён или ссылка заменена. Обратитесь к администратору.');
+  } else {
+    let session = null;
+    try { ({ data: { session } } = await rb.auth.getSession()); } catch { session = null; }
+    if (!session) return loginForm();
+    ({ data, error } = await rb.rpc('my_rep_data'));
+    if (error) {
+      if (/JWT|token|401|PGRST30/i.test(error.message + (error.code || ''))) { await rb.auth.signOut().catch(() => {}); return loginForm(); }
+      return fail('Нет связи', 'Проверьте интернет и обновите страницу.');
+    }
+    if (!data) {
+      if (session.user?.email?.endsWith('@' + STAFF_DOMAIN) || !session.user?.email?.endsWith('@' + REP_DOMAIN)) {
+        return fail('Это кабинет представителя', 'Вы вошли как сотрудник магазина.', '<a class="btn blue" href="app.html" style="display:block;text-align:center;text-decoration:none;margin:0 16px">Открыть приложение</a>');
+      }
+      await rb.auth.signOut().catch(() => {});
+      return loginForm('Вход отключён. Обратитесь в магазин.');
+    }
+    const nb = document.querySelectorAll('#nav .nav-btn')[1];
+    if (nb) {
+      nb.outerHTML = '<button class="nav-btn right" id="rep-out" type="button">Выйти</button>';
+      document.getElementById('rep-out').addEventListener('click', async () => {
+        if (!window.confirm('Выйти из кабинета?')) return;
+        await rb.auth.signOut().catch(() => {}); location.reload();
+      });
+    }
+  }
 
-  const { data, error } = await A.sb.rpc('get_rep_data', { p_token: token });
-  if (error) return fail('Нет связи', 'Проверьте интернет и обновите страницу.');
-  if (!data) return fail('Ссылка недействительна', 'Доступ отключён или ссылка заменена. Обратитесь к администратору.');
+  function loginForm(msg = '') {
+    document.getElementById('nav-title').textContent = 'Вход';
+    page.innerHTML = `
+      <form class="login" id="rl" autocomplete="on" style="padding-top:24px">
+        <img class="logo" src="assets/icon.svg" alt="">
+        <h1>Сверка</h1>
+        <p>Кабинет торгового представителя</p>
+        <div class="list">
+          <label class="field"><span>Логин</span><input name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+          <label class="field"><span>Пароль</span><input name="password" type="password" autocomplete="current-password" required></label>
+        </div>
+        <button class="btn blue" type="submit">Войти</button>
+        <p class="footer-note" style="text-align:center;margin-top:14px">${A.esc(msg || 'Логин и пароль выдаёт магазин. Можно открыть и личную ссылку из сообщения.')}</p>
+      </form>`;
+    document.getElementById('rl').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target, b = f.querySelector('button'), u = f.login.value.trim().toLowerCase();
+      b.disabled = true;
+      const { error: err } = await rb.auth.signInWithPassword({ email: u.includes('@') ? u : `${u}@${REP_DOMAIN}`, password: f.password.value });
+      b.disabled = false;
+      if (err) return A.toast(/Invalid login/i.test(err.message) ? 'Неверный логин или пароль' : /banned/i.test(err.message) ? 'Вход отключён. Обратитесь в магазин.'
+        : /fetch|network/i.test(err.message) ? 'Нет связи с сервером' : err.message, true);
+      location.reload();
+    });
+  }
 
   const orders = data.orders.map((o) => ({ ...o, view: A.orderView(o) }));
   const payouts = data.payouts;
@@ -161,7 +216,8 @@
           <div class="footer-note">Нажмите, когда деньги у вас: магазин увидит подтверждение.</div>` : ''}` });
       api.body.querySelector('#got')?.addEventListener('click', async (e) => {
         e.target.disabled = true;
-        const { data: at, error: err } = await A.sb.rpc('confirm_receipt', { p_token: token, p_id: p.id });
+        const { data: at, error: err } = token ? await A.sb.rpc('confirm_receipt', { p_token: token, p_id: p.id })
+          : await rb.rpc('my_confirm_receipt', { p_id: p.id });
         if (err || !at) { e.target.disabled = false; return A.toast(err ? 'Нет связи — попробуйте ещё раз' : 'Не удалось подтвердить', true); }
         p.received_at = at; A.haptic(); api.close(); A.toast('Получение подтверждено'); render();
       });

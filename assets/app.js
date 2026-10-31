@@ -4,11 +4,11 @@
   const sb = A.sb;
   const $ = (id) => document.getElementById(id);
   const E = A.esc;
-  const STAFF_DOMAIN = 'staff.zapisi.app';
+  const STAFF_DOMAIN = 'staff.zapisi.app', REP_DOMAIN = 'rep.zapisi.app';
 
   const st = {
     me: null, tab: 'today', back: 'today', cal: null,
-    reps: [], stores: [], orders: [], payouts: [], access: [], staff: [],
+    reps: [], stores: [], orders: [], payouts: [], access: [], repUsers: [], staff: [],
     seg: { today: 'today', orders: 'wait', payouts: 'all', dir: 'reps' }, q: { orders: '', payouts: '', dir: '' },
   };
   const isAdmin = () => st.me?.role === 'admin';
@@ -57,7 +57,12 @@
     const u = $('l-user').value.trim().toLowerCase();
     const email = u.includes('@') ? u : `${u}@${STAFF_DOMAIN}`;
     const b = e.target.querySelector('button'); b.disabled = true;
-    const { error } = await sb.auth.signInWithPassword({ email, password: $('l-pass').value });
+    let { error } = await sb.auth.signInWithPassword({ email, password: $('l-pass').value });
+    // логин представителя: его кабинет — на главной странице, там только его данные
+    if (error && /Invalid login/i.test(error.message) && !u.includes('@')) {
+      const r2 = await sb.auth.signInWithPassword({ email: `${u}@${REP_DOMAIN}`, password: $('l-pass').value });
+      if (!r2.error) return location.replace('index.html');
+    }
     b.disabled = false;
     if (fail(error)) return;
     try { localStorage.removeItem('sverka-cache'); } catch { /* */ }
@@ -109,11 +114,15 @@
       fail(r.error); return !!st.me;
     }
     const d = r.data || {};
-    if (!d.me || !d.me.active) { await signOutClean('Нет доступа: учётная запись не активна'); return false; }
+    if (!d.me || !d.me.active) {
+      const { data: { session } } = await sb.auth.getSession();
+      if (!d.me && session?.user?.email?.endsWith('@' + REP_DOMAIN)) { location.replace('index.html'); return false; }
+      await signOutClean('Нет доступа: учётная запись не активна'); return false;
+    }
     st.me = d.me;
     st.reps = sortRu(d.reps || [], 'full_name'); st.stores = sortRu(d.stores || [], 'name');
     st.orders = d.orders || []; st.staff = sortRu(d.staff || [], 'full_name');
-    st.payouts = d.payouts || []; st.access = d.access || [];
+    st.payouts = d.payouts || []; st.access = d.access || []; st.repUsers = d.rep_users || [];
     st.unrec = d.unrec || null; st.open1c = d.open1c || null; st.dbMb = d.db_mb ?? null;
     applyQueue(); cacheSave(); offlineBar();
     return true;
@@ -828,6 +837,15 @@
           <button class="cell action" data-act="wa">Отправить в WhatsApp</button>
           <button class="cell action" data-act="open">Открыть кабинет</button>
           <button class="cell action" data-act="regen">Выдать новую ссылку</button></div>
+        <div class="section-h"><span>Вход по логину и паролю</span></div><div class="list">${(() => {
+          const ru = st.repUsers.find((u) => u.rep_id === id);
+          return ru ? `<div class="cell static"><div class="main">Логин</div><div class="value">${E(ru.login)}${ru.active ? '' : ' · отключён'}</div></div>
+            <button class="cell action" data-act="acc_pass">Сменить пароль</button>
+            <button class="cell ${ru.active ? 'danger' : 'action'}" data-act="acc_toggle">${ru.active ? 'Отключить вход' : 'Включить вход'}</button>
+            <button class="cell danger" data-act="acc_del">Удалить вход</button>`
+            : '<button class="cell action" data-act="acc_new">Создать логин и пароль</button>';
+        })()}</div>
+        <div class="footer-note">По желанию. Представитель видит только своё: заказы, записи, накладные, оплаты, возвраты, долг. Ссылка продолжает работать.</div>
         <div class="section-h"><span>Управление</span></div><div class="list">
           <button class="cell action" data-act="edit">Изменить данные</button>
           <button class="cell ${r.active ? 'danger' : 'action'}" data-act="toggle">${r.active ? 'Отключить доступ' : 'Включить доступ'}</button>
@@ -971,6 +989,22 @@
         A.toast('Новая ссылка готова — отправьте её');
       },
       edit: () => repForm(r),
+      acc_new: () => repAccountForm(r, () => { api.close(); setTimeout(() => repDetail(id), 300); }),
+      acc_pass: () => repAccountForm(r, null, st.repUsers.find((u) => u.rep_id === id)),
+      acc_toggle: async () => {
+        const ru = st.repUsers.find((u) => u.rep_id === id); if (!ru) return;
+        if (ru.active && !(await confirmAct(`Отключить вход «${ru.login}»? Ссылка продолжит работать.`))) return;
+        try { const d = await staffCall({ action: 'rep_update', rep_id: id, active: !ru.active }); Object.assign(ru, d.rep_user);
+          A.toast(ru.active ? 'Вход включён' : 'Вход отключён'); api.close(); setTimeout(() => repDetail(id), 300); }
+        catch (e) { A.toast(e.message, true); }
+      },
+      acc_del: async () => {
+        const ru = st.repUsers.find((u) => u.rep_id === id); if (!ru) return;
+        if (!(await confirmAct(`Удалить вход «${ru.login}»? Заказы и выплаты останутся, ссылка продолжит работать.`))) return;
+        try { await staffCall({ action: 'rep_delete', rep_id: id }); st.repUsers = st.repUsers.filter((u) => u.rep_id !== id);
+          A.toast('Вход удалён'); api.close(); setTimeout(() => repDetail(id), 300); }
+        catch (e) { A.toast(e.message, true); }
+      },
       toggle: () => update({ active: !r.active }, r.active ? 'Доступ отключён' : 'Доступ включён'),
       delete: async () => {
         if (!(await confirmAct(`Удалить «${r.full_name}»?`))) return;
@@ -1058,7 +1092,8 @@
         <div class="footer-note">Одна ссылка для всех: кто и на какое число записан на выплату. Выплаченные не видны. Новая ссылка отключает старую.</div>
         <div class="section-h"><span>1С</span></div><div class="list">
           <button class="cell action" data-act-import>Загрузить из 1С</button>
-          ${st.open1c?.n ? `<button class="cell action" data-act-unrec>Не оплачено в 1С · ${st.open1c.n}</button>` : ''}</div>
+          ${st.open1c?.n ? `<button class="cell action" data-act-unrec>Не оплачено в 1С · ${st.open1c.n}</button>` : ''}
+          <button class="cell danger" data-act-purge>Удалить загруженное за период</button></div>
         <div class="footer-note">Контрагенты, приходные накладные, расходные кассовые ордера, возвраты, «Взаиморасчёты с контрагентами» — можно несколько файлов сразу.
           Повторная загрузка обновляет изменения, копий не будет.</div>
         ${st.dbMb != null ? `<div class="section-h"><span>Место</span></div><div class="list"><div class="cell static"><div class="main">База данных</div>
@@ -1081,6 +1116,7 @@
     $('body').querySelectorAll('[data-store]').forEach((c) => c.addEventListener('click', () => storeForm(storeById(c.dataset.store))));
     $('body').querySelector('[data-act-store]')?.addEventListener('click', () => storeForm());
     $('body').querySelector('[data-act-import]')?.addEventListener('click', () => import1C());
+    $('body').querySelector('[data-act-purge]')?.addEventListener('click', () => purge1C());
     $('body').querySelector('[data-act-unrec]')?.addEventListener('click', () => debtSheet('all'));
     $('body').querySelector('[data-act-history]')?.addEventListener('click', () => historySheet());
     $('body').querySelectorAll('[data-shared]').forEach((c) => c.addEventListener('click', () => sharedLink(c.dataset.shared)));
@@ -1168,7 +1204,7 @@
   }
   function applyQueue() { for (const w of queue) applyLocal(w, true); }
   function cacheSave() {
-    try { localStorage.setItem(CKEY, JSON.stringify({ me: st.me, reps: st.reps, stores: st.stores, orders: st.orders, payouts: st.payouts, access: st.access, staff: st.staff, unrec: st.unrec, open1c: st.open1c, dbMb: st.dbMb })); }
+    try { localStorage.setItem(CKEY, JSON.stringify({ me: st.me, reps: st.reps, stores: st.stores, orders: st.orders, payouts: st.payouts, access: st.access, repUsers: st.repUsers, staff: st.staff, unrec: st.unrec, open1c: st.open1c, dbMb: st.dbMb })); }
     catch { /* мало места — без кэша */ }
   }
   function cacheLoad() {
@@ -1501,6 +1537,7 @@
     let what;
     if (e.action === 'import') what = d.kind === 'docs' ? `загрузил документы 1С${(d.files || []).length ? ': ' + d.files.map((f) => f.kind).join(', ') : ''}${d.deleted ? ', удалено в 1С ' + d.deleted : ''}`
       : `загрузил справочник из 1С: новых ${d.added}, изменено ${d.updated}${d.deactivated ? ', отключено ' + d.deactivated : ''}`;
+    else if (e.action === 'purge') what = `удалил документы 1С (${(d.kinds || []).map((k) => (KIND1C.find((x) => x[0] === k) || [k, k])[1].toLowerCase()).join(', ')}) за ${A.fmtDate(d.from)} – ${A.fmtDate(d.to)}: ${Number(d.n || 0).toLocaleString('ru-RU')} шт. на ${A.fmtMoney(d.sum)}`;
     else if (e.action === 'insert') what = (e.entity === 'orders' ? 'записал ' : 'добавил ') + subj;
     else if (e.action === 'delete') what = 'удалил ' + subj;
     else if (ch.status && Object.keys(ch).length === 1) {
@@ -1736,6 +1773,117 @@
       } catch (e) { rows = null; box.innerHTML = ''; A.toast(e.message, true); }
       input.value = '';
     });
+  }
+
+  // Логин представителя: из имени латиницей (можно поправить)
+  const LAT = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p',
+    р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya' };
+  const loginFrom = (name) => String(name || '').toLowerCase().split(/\s+/).slice(0, 2).join('.')
+    .replace(/[а-яё]/g, (c) => LAT[c] ?? '').replace(/[^a-z0-9.]/g, '').replace(/\.+/g, '.').replace(/^\.|\.$/g, '').slice(0, 24) || 'tp';
+  const genPass = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => (b % 10)).join('') + Math.random().toString(36).slice(2, 6);
+  function repAccountForm(r, onDone, ru = null) {
+    const site = new URL('./', location.href).href;
+    const api = A.sheet({ title: ru ? 'Новый пароль' : 'Вход для представителя', left: 'Отмена', right: { label: ru ? 'Сохранить' : 'Создать', onClick: (a) => save(a) }, body: `
+      <div class="section-h"><span>${E(r.full_name)}</span></div><div class="list">
+        ${field('Логин', `<input name="login" value="${E(ru ? ru.login : loginFrom(r.full_name))}" ${ru ? 'readonly' : ''} autocapitalize="none" spellcheck="false">`)}
+        ${field('Пароль', `<input name="password" type="text" autocomplete="new-password" value="${genPass()}">`)}
+      </div>
+      <button class="btn plain" type="button" data-act="gen">Другой пароль</button>
+      <div class="footer-note">Вход: ${E(site)} — логин и пароль. Представитель увидит только свои заказы, записи на выплату, накладные, оплаты, возвраты и долг. Пароль после сохранения не показывается — отправьте его сразу.</div>` });
+    const f = api.body; const v = (n) => f.querySelector(`[name=${n}]`).value.trim();
+    onActs(api, { gen: () => { f.querySelector('[name=password]').value = genPass(); } });
+    async function save(a) {
+      const login = v('login').toLowerCase(), password = v('password');
+      if (!/^[a-z0-9._-]{3,32}$/.test(login)) return A.toast('Логин: 3–32 символа, латиница, цифры, . _ -', true);
+      if (password.length < 6) return A.toast('Пароль не короче 6 символов', true);
+      a.busy(true);
+      try {
+        if (ru) await staffCall({ action: 'rep_update', rep_id: r.id, password });
+        else { const d = await staffCall({ action: 'rep_create', rep_id: r.id, login, password }); st.repUsers.push(d.rep_user); cacheSave(); }
+      } catch (e) { a.busy(false); return A.toast(e.message, true); }
+      a.close();
+      const text = `${r.full_name}, ваш кабинет: ${site}\nЛогин: ${login}\nПароль: ${password}`;
+      const phone = (r.phone || '').split(',')[0].replace(/\D/g, '').replace(/^8(?=\d{10}$)/, '7');
+      const done = A.sheet({ title: 'Готово', right: { label: 'Закрыть', onClick: (x) => { x.close(); onDone?.(); } }, body: `
+        <div class="list"><div class="cell static"><div class="main" style="white-space:pre-wrap">${E(text)}</div></div></div>
+        ${btn('copy', 'Скопировать', 'blue')}${phone ? btn('wa', 'Отправить в WhatsApp') : ''}
+        <div class="footer-note">Пароль больше не показывается. Забудет — нажмите «Сменить пароль».</div>` });
+      onActs(done, {
+        copy: async () => { try { await navigator.clipboard.writeText(text); A.toast('Скопировано'); } catch { window.prompt('Скопируйте', text); } },
+        wa: () => window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, '_blank', 'noopener'),
+      });
+    }
+  }
+
+  // ---------- 1С: удалить загруженные документы за период ----------
+  const KIND1C = [['in', 'Приходы'], ['pay', 'Расходники (оплаты)'], ['ret', 'Возвраты'], ['other', 'Прочее']];
+  function purge1C() {
+    const t = A.today(), m0 = t.slice(0, 8) + '01';
+    const sel = new Set();
+    let stats = {}, seq = 0;
+    const api = A.sheet({ title: 'Удалить из 1С', left: 'Отмена', body: `
+      <div class="section-h"><span>Период документов</span></div><div class="list">
+        ${field('С', `<input name="from" type="date" value="${m0}" max="${t}">`)}
+        ${field('По', `<input name="to" type="date" value="${t}">`)}
+      </div>
+      <div class="section-h"><span>Что удалить</span></div><div class="list" id="pk"></div>
+      <div id="pmsg"></div>
+      <button class="btn red" type="button" data-act="go" disabled>Удалить</button>
+      <div class="footer-note">Документы стираются из базы полностью. Записи на выплату и заказы останутся — у них снимется только связь с удалёнными накладными.
+        Повторная загрузка того же файла вернёт документы.</div>` });
+    const f = api.body, v = (n) => f.querySelector(`[name=${n}]`).value;
+    const total = () => KIND1C.filter(([k]) => sel.has(k)).reduce((a, [k]) => ({ n: a.n + (stats[k]?.n || 0), sum: a.sum + Number(stats[k]?.sum || 0) }), { n: 0, sum: 0 });
+    const draw = () => {
+      f.querySelector('#pk').innerHTML = KIND1C.map(([k, l]) => `<button type="button" class="cell inv-pick ${sel.has(k) ? 'on' : ''}" data-k="${k}" ${stats[k]?.n ? '' : 'disabled'}>
+        <span class="pick-ic"></span><div class="main"><div class="t">${l}</div><div class="s">${stats[k]?.n ? `${Number(stats[k].n).toLocaleString('ru-RU')} шт. · ${stats[k].reps} поставщ.` : 'нет за период'}</div></div>
+        <div class="r"><div class="amt">${stats[k]?.n ? A.fmtMoney(stats[k].sum) : ''}</div></div></button>`).join('');
+      const tt = total(), go = f.querySelector('[data-act=go]');
+      go.disabled = !tt.n; go.textContent = tt.n ? `Удалить ${tt.n.toLocaleString('ru-RU')} док. на ${A.fmtMoney(tt.sum)}` : 'Удалить';
+    };
+    const load = async () => {
+      const my = ++seq, from = v('from'), to = v('to');
+      if (!from || !to || to < from) { stats = {}; return draw(); }
+      f.querySelector('#pk').innerHTML = '<div class="cell static"><div class="spinner" style="margin:0 auto"></div></div>';
+      const { data, error } = await sb.rpc('docs_stats', { p_from: from, p_to: to });
+      if (my !== seq) return;
+      if (fail(error)) { stats = {}; return draw(); }
+      stats = data || {}; for (const k of [...sel]) if (!stats[k]?.n) sel.delete(k);
+      draw();
+    };
+    f.querySelectorAll('input[type=date]').forEach((i) => i.addEventListener('change', load));
+    f.querySelector('#pk').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-k]'); if (!b || b.disabled) return;
+      A.haptic(); sel.has(b.dataset.k) ? sel.delete(b.dataset.k) : sel.add(b.dataset.k); draw();
+    });
+    onActs(api, { go: async () => {
+      const tt = total(), kinds = [...sel], from = v('from'), to = v('to');
+      const names = KIND1C.filter(([k]) => sel.has(k)).map(([, l]) => l.toLowerCase()).join(', ');
+      if (!tt.n || !(await confirmAct(`Удалить ${tt.n} док. (${names}) за ${A.fmtDate(from)} – ${A.fmtDate(to)}? Это необратимо.`))) return;
+      api.busy(true);
+      const msg = f.querySelector('#pmsg'), say = (x) => { msg.innerHTML = x ? `<div class="footer-note">${E(x)}</div>` : ''; };
+      let done = 0, sum = 0; const reps = new Set();
+      try {
+        for (let guard = 0; guard < 100; guard++) {
+          say(`Удаление: ${done.toLocaleString('ru-RU')} из ${tt.n.toLocaleString('ru-RU')}…`);
+          const { data, error } = await sb.rpc('delete_docs', { p_from: from, p_to: to, p_kinds: kinds, p_done: done, p_done_sum: sum });
+          if (error) throw error;
+          done += data.deleted; sum += Number(data.sum || 0); (data.reps || []).forEach((x) => reps.add(x));
+          if (!data.more) break;
+        }
+        const list = [...reps];
+        for (let i = 0; i < list.length; i += 100) {
+          say(`Пересчёт долгов: ${Math.min(i + 100, list.length)} из ${list.length} поставщиков…`);
+          const r = await sb.rpc('reconcile', { p_reps: list.slice(i, i + 100) }); if (r.error) throw r.error;
+        }
+      } catch (e) {
+        api.busy(false); say('');
+        if (/delete_docs|function .* does not exist|PGRST202/i.test(e.message + (e.code || ''))) return A.toast('Удаление ещё не включено в базе — нужен шаг администратора базы', true);
+        return A.toast(humanError(e) + (done ? ` (удалено ${done})` : ''), true);
+      }
+      await loadAll(); lastLoad = Date.now(); render();
+      api.close(); A.toast(`Удалено документов: ${done.toLocaleString('ru-RU')}`);
+    } });
+    load();
   }
 
   async function staffCall(payload) {

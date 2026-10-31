@@ -113,7 +113,7 @@
     st.reps = sortRu(d.reps || [], 'full_name'); st.stores = sortRu(d.stores || [], 'name');
     st.orders = d.orders || []; st.staff = sortRu(d.staff || [], 'full_name');
     st.payouts = d.payouts || []; st.access = d.access || [];
-    st.unrec = d.unrec || null; st.dbMb = d.db_mb ?? null;
+    st.unrec = d.unrec || null; st.open1c = d.open1c || null; st.dbMb = d.db_mb ?? null;
     applyQueue(); cacheSave(); offlineBar();
     return true;
   }
@@ -489,7 +489,7 @@
       sb.from('docs').select('*').eq('id', p.doc_id).maybeSingle().then(({ data: d }) => {
         if (!d || !api.el.isConnected) return;
         const box = document.createElement('div');
-        box.innerHTML = `<div class="section-h"><span>Накладная в 1С</span></div>${info([['№', shortNum(d.num) + (d.in_no ? ` (вх. ${d.in_no})` : '')],
+        box.innerHTML = `<div class="section-h"><span>Накладная в 1С</span></div>${info([['Накладная', A.docNo({ ...d, kind: 'in' })],
           ['Дата', A.fmtDate(d.doc_at.slice(0, 10))], ['Сумма', A.fmtMoney(d.inc)],
           ['В 1С', d.deleted ? 'удалена' : Number(d.open_amount) > 0 ? `не оплачено ${A.fmtMoney(d.open_amount)}` : 'оплачена']])}
           ${paid && Number(d.open_amount) > 0 && !d.deleted ? '<div class="footer-note warn">Отмечено «Оплачено», а в 1С расходника на эту накладную нет.</div>' : ''}`;
@@ -672,8 +672,14 @@
         d.deleted ? 'удалён в 1С' : d.kind === 'in' ? (Number(d.open) > 0 ? `не оплачено ${A.fmtMoney(d.open)}` : 'оплачено') : d.article].filter(Boolean).join(' · ');
       const pill = d.kind === 'in' && !d.deleted && Number(d.open) > 0 ? A.pill(link ? A.payView(link.status) : { label: 'Нет записи', c: 'orange' }) : '';
       return `<button class="cell doc ${d.deleted ? 'deleted' : ''} k-${d.kind}" data-doc="${d.id}"><div class="main">
-        <div class="t">${E(docLabel(d))} № ${E(shortNum(d.num))}</div><div class="s">${E(sub)}</div></div>
+        <div class="t">${E(docTitle(d))}</div><div class="s">${E(sub)}</div></div>
         <div class="r"><div class="amt">${money}</div>${pill}</div></button>`;
+    }
+    // «Приход № 36», «Приход б/н», «Оплата накладной № 36», «Возврат»
+    function docTitle(d) {
+      const basis = d.kind !== 'in' && d.basis_id ? docById().get(d.basis_id) : null;
+      if (basis) return `${docLabel(d)} накладной ${A.docNo(basis)}`;
+      return `${docLabel(d)} ${A.docNo(d)}`.trim();
     }
     function docsHtml() {
       if (!docs) return '<div class="spinner" style="margin:32px auto"></div>';
@@ -698,15 +704,17 @@
       const link = st.payouts.find((p) => p.doc_id === d.id), basis = d.basis_id ? docById().get(d.basis_id) : null;
       const canRecord = d.kind === 'in' && !d.deleted && Number(d.open) > 0 && !link;
       const a2 = A.sheet({ title: docLabel(d), left: 'Закрыть', body: `
-        <div class="hero"><div class="amount">${A.fmtMoney(Number(d.inc) || Number(d.dec))}</div><div class="who">${E(d.title)} № ${E(d.num)}</div>
+        <div class="hero"><div class="amount">${A.fmtMoney(Number(d.inc) || Number(d.dec))}</div><div class="who">${E(docTitle(d))}</div>
           ${d.deleted ? A.pill({ label: 'Удалён в 1С', c: 'red' }) : d.kind === 'in' ? A.pill(Number(d.open) > 0 ? { label: `Не оплачено ${A.fmtMoney(d.open)}`, c: 'orange' } : { label: 'Оплачено', c: 'green' }) : ''}</div>
         <div class="section-h"><span>Из 1С</span></div>
-        ${info([['Дата', A.fmtDate(d.at.slice(0, 10)) + ' ' + d.at.slice(11, 16)], ['Входящий №', d.in_no], ['В розничных ценах', d.retail != null ? A.fmtMoney(d.retail) : null],
+        ${info([['Дата', A.fmtDate(d.at.slice(0, 10)) + ' ' + d.at.slice(11, 16)], ['Входящий №', d.kind === 'in' ? d.in_no || 'нет (ручная накладная)' : d.in_no],
+          ['В розничных ценах', d.retail != null ? A.fmtMoney(d.retail) : null],
           ['Оплатить до', d.pay_due ? A.fmtDate(d.pay_due) : null], ['Статья', d.article], ['Касса', d.cash],
-          ['По накладной', basis ? `№ ${shortNum(basis.num)} от ${A.fmtShort(basis.at.slice(0, 10))}` : null], ['Комментарий', d.comment]])}
+          ['По накладной', basis ? `${A.docNo(basis)} от ${A.fmtShort(basis.at.slice(0, 10))}` : null], ['Комментарий', d.comment],
+          ['Номер в 1С', shortNum(d.num)]])}
         ${canRecord ? btn('record', 'Записать на выплату', 'blue') : ''}${link ? btn('openpay', 'Открыть запись на выплату') : ''}` });
       onActs(a2, {
-        record: () => payoutForm(null, { rep_id: id, doc_id: d.id, amount: Number(d.open), invoice_no: d.in_no || shortNum(d.num),
+        record: () => payoutForm(null, { rep_id: id, doc_id: d.id, amount: Number(d.open), invoice_no: d.in_no || '',
           payout_date: d.pay_due && d.pay_due >= A.today() ? d.pay_due : A.today(), after: () => setTimeout(() => repDetail(id, 'docs'), 350) }),
         openpay: () => payoutDetail(link.id),
       });
@@ -830,7 +838,7 @@
         <div class="footer-note">Одна ссылка для всех: кто и на какое число записан на выплату. Выплаченные не видны. Новая ссылка отключает старую.</div>
         <div class="section-h"><span>1С</span></div><div class="list">
           <button class="cell action" data-act-import>Загрузить из 1С</button>
-          ${st.unrec?.n ? `<button class="cell action" data-act-unrec>Накладные без записи · ${st.unrec.n}</button>` : ''}</div>
+          ${st.open1c?.n ? `<button class="cell action" data-act-unrec>Не оплачено в 1С · ${st.open1c.n}</button>` : ''}</div>
         <div class="footer-note">Контрагенты, приходные накладные, расходные кассовые ордера, возвраты, «Взаиморасчёты с контрагентами» — можно несколько файлов сразу.
           Повторная загрузка обновляет изменения, копий не будет.</div>
         ${st.dbMb != null ? `<div class="section-h"><span>Место</span></div><div class="list"><div class="cell static"><div class="main">База данных</div>
@@ -853,7 +861,7 @@
     $('body').querySelectorAll('[data-store]').forEach((c) => c.addEventListener('click', () => storeForm(storeById(c.dataset.store))));
     $('body').querySelector('[data-act-store]')?.addEventListener('click', () => storeForm());
     $('body').querySelector('[data-act-import]')?.addEventListener('click', () => import1C());
-    $('body').querySelector('[data-act-unrec]')?.addEventListener('click', () => unrecSheet());
+    $('body').querySelector('[data-act-unrec]')?.addEventListener('click', () => debtSheet('all'));
     $('body').querySelector('[data-act-history]')?.addEventListener('click', () => historySheet());
     $('body').querySelectorAll('[data-shared]').forEach((c) => c.addEventListener('click', () => sharedLink(c.dataset.shared)));
     $('body').querySelectorAll('[data-staff]').forEach((c) => c.addEventListener('click', () => staffForm(st.staff.find((s) => s.user_id === c.dataset.staff))));
@@ -940,7 +948,7 @@
   }
   function applyQueue() { for (const w of queue) applyLocal(w, true); }
   function cacheSave() {
-    try { localStorage.setItem(CKEY, JSON.stringify({ me: st.me, reps: st.reps, stores: st.stores, orders: st.orders, payouts: st.payouts, access: st.access, staff: st.staff, unrec: st.unrec, dbMb: st.dbMb })); }
+    try { localStorage.setItem(CKEY, JSON.stringify({ me: st.me, reps: st.reps, stores: st.stores, orders: st.orders, payouts: st.payouts, access: st.access, staff: st.staff, unrec: st.unrec, open1c: st.open1c, dbMb: st.dbMb })); }
     catch { /* мало места — без кэша */ }
   }
   function cacheLoad() {
@@ -1084,9 +1092,11 @@
     const tomO = ordersOn(t1), tomP = payoutsOn(t1).filter((p) => p.status !== 'paid');
     const sec = (title, items, cells, cls = '') => (items.length ? `<div class="section-h ${cls}"><span>${E(title)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">${cells}</div>` : '');
     let html = `<div class="subtitle">${E(weekday(t))}</div>${quickActions()}`;
-    if (isAdmin() && st.unrec?.n) {
-      html += `<div class="list"><button class="cell" id="unrec"><div class="main"><div class="t"><b>Накладные без записи</b></div>
-        <div class="s">не оплачены в 1С, записи на выплату нет</div></div><div class="r"><div class="amt">${A.fmtMoney(st.unrec.sum)}</div>${A.pill({ label: String(st.unrec.n), c: 'orange' })}</div></button></div>`;
+    if (isAdmin() && (st.open1c?.n || st.unrec?.n)) {
+      const o = st.open1c || st.unrec;
+      html += `<div class="list"><button class="cell" id="debt1c"><div class="main"><div class="t"><b>Не оплачено в 1С</b></div>
+        <div class="s">${o.n} накл. без расходника${st.unrec?.n ? ` · без записи ${st.unrec.n}` : ''}</div></div>
+        <div class="r"><div class="amt">${A.fmtMoney(o.sum)}</div>${A.pill({ label: String(o.n), c: 'orange' })}</div></button></div>`;
     }
     html += sec(`Заказы просрочены · ${late.length}`, late, late.map(orderCell).join(''), 'red');
     html += sec(`Придут сегодня · ${today.length}`, today, today.map(orderCell).join(''));
@@ -1098,33 +1108,68 @@
       html += `<div class="section-h"><span>Завтра</span></div><div class="list">${tomO.map(orderCell).join('')}${tomP.map((p) => payoutCell(p, payNote(p) || 'выплата')).join('')}</div>`;
     }
     setBody(html); bindCells($('body')); bindQuick($('body'));
-    $('unrec')?.addEventListener('click', unrecSheet);
+    $('debt1c')?.addEventListener('click', () => debtSheet('all'));
   }
 
   // Неоплаченные в 1С накладные без записи на выплату — по поставщикам
-  async function unrecSheet() {
-    const api = A.sheet({ title: 'Накладные без записи', left: 'Закрыть', body: '<div class="spinner" style="margin:40px auto"></div>' });
-    const { data, error } = await sb.rpc('unrecorded_invoices');
+  // Долг по накладным: всё, что в 1С не закрыто расходником. Фильтр «без записи», вид «по поставщикам» / «по накладным».
+  const unrecSheet = () => debtSheet('norec');
+  async function debtSheet(start = 'all') {
+    const api = A.sheet({ title: 'Не оплачено в 1С', left: 'Закрыть', body: '<div class="spinner" style="margin:40px auto"></div>' });
+    const { data, error } = await sb.rpc('open_invoices');
     if (!api.el.isConnected) return;
     if (error) { api.body.innerHTML = A.emptyState('Не удалось загрузить', humanError(error)); return; }
-    const by = A.groupBy(data, (d) => d.rep_id);
-    const groups = [...by.entries()].map(([rid, items]) => ({ rid, items, last: items[items.length - 1].at, sum: items.reduce((a, d) => a + A.toCents(d.open), 0) / 100 }))
-      .sort((a, b) => b.last.localeCompare(a.last));
-    let q = '';
+    const t = A.today();
+    const days = (d) => Math.max(0, Math.round((new Date(t + 'T12:00:00') - new Date(d.at.slice(0, 10) + 'T12:00:00')) / 864e5));
+    const money = (rows) => rows.reduce((a, d) => a + A.toCents(d.open), 0) / 100;
+    let flt = start, view = 'reps', q = '', limit = 150;
     const draw = () => {
-      const list = q ? A.rank(q, groups, (g) => { const r = repById(g.rid); return [r?.full_name, r?.company]; }) : groups;
-      api.body.querySelector('#ul').innerHTML = list.length ? `<div class="list">${list.map((g) => {
-        const r = repById(g.rid);
-        return `<button class="cell" data-rep="${g.rid}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
-          <div class="s">${g.items.length} накл. · последняя ${E(A.fmtShort(g.last.slice(0, 10)))}</div></div>
-          <div class="r"><div class="amt">${A.fmtMoney(g.sum)}</div></div></button>`;
-      }).join('')}</div>` : A.emptyState('Ничего не найдено');
+      const rows = data.filter((d) => flt === 'all' || !d.rec);
+      const norec = data.filter((d) => !d.rec);
+      api.body.querySelector('#dseg').innerHTML = [['all', `Все · ${data.length}`], ['norec', `Без записи · ${norec.length}`]]
+        .map(([k, l]) => `<button data-f="${k}" class="${flt === k ? 'on' : ''}">${l}</button>`).join('');
+      api.body.querySelector('#dview').innerHTML = [['reps', 'По поставщикам'], ['docs', 'По накладным']]
+        .map(([k, l]) => `<button data-v="${k}" class="${view === k ? 'on' : ''}">${l}</button>`).join('');
+      api.body.querySelector('#dsum').innerHTML = `<div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--orange)"></span>Накладных · ${rows.length}</div>
+          <div class="v">${A.fmtMoney(money(rows))}</div></div>
+        <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--red)"></span>Висят дольше 30 дней</div>
+          <div class="v">${A.fmtMoney(money(rows.filter((d) => days(d) > 30)))}</div></div>`;
+      let html = '';
+      if (view === 'reps') {
+        const groups = [...A.groupBy(rows, (d) => d.rep_id).entries()].map(([rid, items]) => ({ rid, items, sum: money(items), first: items[0] }))
+          .sort((a, b) => b.sum - a.sum);
+        const list = q ? A.rank(q, groups, (g) => { const r = repById(g.rid); return [r?.full_name, r?.company]; }) : groups;
+        html = list.length ? `<div class="list">${list.slice(0, limit).map((g) => {
+          const r = repById(g.rid), dd = days(g.first);
+          return `<button class="cell" data-rep="${g.rid}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
+            <div class="s">${g.items.length} накл. · висит с ${E(A.fmtShort(g.first.at.slice(0, 10)))} (${dd} дн.)</div></div>
+            <div class="r"><div class="amt">${A.fmtMoney(g.sum)}</div>${dd > 30 ? A.pill({ label: dd + ' дн.', c: 'red' }) : ''}</div></button>`;
+        }).join('')}</div>` : A.emptyState('Ничего не найдено');
+        if (list.length > limit) html += '<button class="btn plain" type="button" data-more>Показать ещё</button>';
+      } else {
+        const list = q ? A.rank(q, rows, (d) => { const r = repById(d.rep_id); return [r?.full_name, r?.company, d.in_no, d.open]; }) : rows;
+        html = list.length ? `<div class="list">${list.slice(0, limit).map((d) => {
+          const r = repById(d.rep_id), dd = days(d);
+          return `<button class="cell" data-rep="${d.rep_id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
+            <div class="s">${E([A.docNo({ ...d, kind: 'in' }), A.fmtShort(d.at.slice(0, 10)), dd + ' дн.'].join(' · '))}</div></div>
+            <div class="r"><div class="amt">${A.fmtMoney(d.open)}</div>${A.pill(d.rec ? A.payView(d.rec) : { label: 'Нет записи', c: 'orange' })}</div></button>`;
+        }).join('')}</div>` : A.emptyState('Ничего не найдено');
+        if (list.length > limit) html += '<button class="btn plain" type="button" data-more>Показать ещё</button>';
+      }
+      api.body.querySelector('#dl').innerHTML = html;
     };
-    api.body.innerHTML = `<div class="footer-note" style="margin:8px 4px 10px">В 1С не оплачены, записи на выплату нет. Откройте поставщика → «1С» → накладная → «Записать на выплату».</div>
-      ${A.searchBox('uq', 'Поставщик')}<div id="ul"></div>`;
+    api.body.innerHTML = `<div class="footer-note" style="margin:8px 4px 10px">Приходные накладные, на которые в 1С нет расходника (оплаты).
+        Оплаты с «Документом основанием» закрывают свою накладную, остальные — самые старые.</div>
+      <div class="segmented" id="dseg"></div><div class="stats" id="dsum"></div><div class="segmented" id="dview"></div>
+      ${A.searchBox('dq', 'Поставщик, № накладной, сумма')}<div id="dl"></div>`;
     draw();
-    A.bindSearch(api.body.querySelector('#uq'), () => { q = api.body.querySelector('#uq').value; draw(); });
-    api.body.addEventListener('click', (e) => { const c = e.target.closest('[data-rep]'); if (c) repDetail(c.dataset.rep, 'docs'); });
+    A.bindSearch(api.body.querySelector('#dq'), () => { q = api.body.querySelector('#dq').value; limit = 150; draw(); });
+    api.body.addEventListener('click', (e) => {
+      const f = e.target.closest('[data-f]'); if (f) { flt = f.dataset.f; limit = 150; A.haptic(); draw(); return; }
+      const v = e.target.closest('[data-v]'); if (v) { view = v.dataset.v; limit = 150; A.haptic(); draw(); return; }
+      if (e.target.closest('[data-more]')) { limit += 300; draw(); return; }
+      const c = e.target.closest('[data-rep]'); if (c) repDetail(c.dataset.rep, 'docs');
+    });
   }
 
   function renderCalendar() {

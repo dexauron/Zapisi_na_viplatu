@@ -156,6 +156,9 @@
     paid: { label: 'Оплачено', c: 'green' },
   };
   const payView = (s) => PAY[s === 'paid' ? 'paid' : 'to_pay'];
+  // Номер накладной для людей — входящий номер поставщика. У ручных накладных его нет: «б/н».
+  // Внутренний номер 1С (ПФ…) в списках не показывается — только в подробностях документа.
+  const docNo = (d) => (d?.in_no ? '№ ' + d.in_no : d?.kind === 'in' ? 'б/н' : '');
   const ORD = {
     ordered: { label: 'Ожидается', c: 'blue' },
     delivered: { label: 'Пришёл', c: 'green' },
@@ -373,5 +376,5 @@
   function emptyState(title, text = '') { return `<div class="empty"><div class="big">${esc(title)}</div>${esc(text)}</div>`; }
 
   window.App = { sb, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches, rank, mark, canon,
-    PAY, payView, ORD, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON };
+    PAY, payView, docNo, ORD, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON };
 })();

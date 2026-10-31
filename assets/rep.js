@@ -102,7 +102,7 @@
         if (st.tab === 'orders') {
           html += cell(r.id, r.store || 'Заказ от ' + A.fmtShort(r.date), [A.orderWhen(r), actual(r)].filter(Boolean).join(' · '), r.amount, r.view);
         } else if (st.tab === 'docs') {
-          html += cell(r.id, `${DOC[r.kind] || r.title} № ${shortNum(r.num)}`,
+          html += cell(r.id, `${DOC[r.kind] || r.title} ${A.docNo(r)}`.trim(),
             [A.fmtShort(r.date), r.kind === 'in' && Number(r.open) > 0 ? `не оплачено ${A.fmtMoney(r.open)}` : ''].filter(Boolean).join(' · '), r.amount, r.view);
         } else {
           html += cell(r.id, r.invoice_no ? 'Накладная № ' + r.invoice_no : r.basis || 'Выплата',
@@ -127,7 +127,7 @@
       A.sheet({ title: DOC[d.kind] || d.title, left: 'Закрыть', body: `
         <div class="hero"><div class="amount">${A.fmtMoney(d.amount)}</div><div class="who">${A.pill(d.view)}</div></div>
         <div class="section-h"><span>Детали</span></div>
-        ${info([['Документ', `${d.title} № ${d.num}`], ['Дата', A.fmtDate(d.date)], ['Входящий №', d.in_no],
+        ${info([['Документ', `${DOC[d.kind] || d.title} ${A.docNo(d)}`.trim()], ['Дата', A.fmtDate(d.date)],
           ['Не оплачено', d.kind === 'in' && Number(d.open) > 0 ? A.fmtMoney(d.open) : null]])}` });
       return;
     }

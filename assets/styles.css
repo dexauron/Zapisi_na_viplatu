@@ -526,3 +526,20 @@ mark { background: none; color: inherit; font-weight: 700; }
 .age-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 :root[data-fz="xl"] .age-legend { grid-template-columns: minmax(0, 1fr); }
 .filter-chip { display: inline-block; margin: -4px 0 6px; font-size: 13px; padding: 6px 12px; background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--blue); font-weight: 600; }
+
+/* ---------- Выбор периода ---------- */
+.per { margin: 2px 0 12px; }
+.per .segmented { margin: 0 0 6px; }
+.per-nav { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.per-arr { width: 40px; height: 36px; border: 0; background: none; color: var(--blue); font-size: 26px; line-height: 1; cursor: pointer; border-radius: 10px; flex-shrink: 0; }
+button.per-arr:active { background: var(--fill); }
+.per-l { flex: 1; border: 0; background: none; font-size: 16px; font-weight: 650; color: var(--label); padding: 6px; cursor: pointer; border-radius: 10px; }
+.per-l::after { content: " ▾"; color: var(--label3); font-size: 12px; }
+.per-l.away { color: var(--blue); }
+.per-custom { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; margin-top: 6px; background: var(--bg2); border-radius: var(--r); box-shadow: 0 0 0 1px var(--line); }
+.per-custom label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--label2); }
+.per-custom input { border: 0; background: var(--fill); border-radius: 8px; padding: 6px 8px; font-size: 15px; color: var(--label); }
+.per-custom .chip { margin-left: auto; }
+.per-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; background: var(--bg2); border-radius: 18px; padding: 14px 16px; box-shadow: 0 0 0 1px var(--line); font-size: 15px; }
+.per-card span { color: var(--label2); } .per-card em { font-style: normal; font-weight: 650; text-align: right; }
+.per-card .tot { border-top: 1px dashed var(--sep); padding-top: 8px; margin-top: 2px; color: var(--label); font-weight: 600; }

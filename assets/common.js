@@ -437,6 +437,69 @@
       document.head.append(el);
     });
   }
+  // ---------- выбор периода: день / неделя / месяц / всё / свой ----------
+  // p = { k: 'day'|'week'|'month'|'all'|'custom', a: дата-якорь, from, to }. range(p) → { from, to } или null (всё время)
+  const PERIOD_KINDS = [['day', 'День'], ['week', 'Неделя'], ['month', 'Месяц'], ['all', 'Всё']];
+  const monday = (d) => { const x = new Date(d + 'T12:00:00'); return addDays(d, -((x.getDay() + 6) % 7)); };
+  const monthEnd = (d) => { const [y, m] = d.split('-').map(Number); return new Date(y, m, 0).toLocaleDateString('sv-SE'); };
+  function periodRange(p) {
+    if (!p || p.k === 'all') return null;
+    if (p.k === 'custom') return { from: p.from, to: p.to };
+    if (p.k === 'day') return { from: p.a, to: p.a };
+    if (p.k === 'week') { const f = monday(p.a); return { from: f, to: addDays(f, 6) }; }
+    const f = p.a.slice(0, 8) + '01'; return { from: f, to: monthEnd(f) };
+  }
+  const period = (k = 'month', a = today()) => ({ k, a });
+  const inPeriod = (p, d) => { const r = periodRange(p); return !r || (!!d && d.slice(0, 10) >= r.from && d.slice(0, 10) <= r.to); };
+  function periodLabel(p) {
+    const r = periodRange(p), t = today();
+    if (!r) return 'Всё время';
+    if (p.k === 'day') return (r.from === t ? 'Сегодня, ' : r.from === addDays(t, -1) ? 'Вчера, ' : '') + new Date(r.from + 'T12:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+    if (p.k === 'month') return fmtMonth(r.from.slice(0, 7));
+    const a = new Date(r.from + 'T12:00:00'), b = new Date(r.to + 'T12:00:00');
+    const sameM = r.from.slice(0, 7) === r.to.slice(0, 7), sameY = r.from.slice(0, 4) === r.to.slice(0, 4);
+    const tail = sameY && r.to.slice(0, 4) === t.slice(0, 4) ? '' : ' ' + r.to.slice(0, 4);
+    if (p.k === 'week' && sameM) return `${a.getDate()}–${b.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}${tail}`;
+    return `${fmtShort(r.from)} – ${fmtShort(r.to)}${tail}`;
+  }
+  function periodShift(p, dir) {
+    if (p.k === 'day') return { ...p, a: addDays(p.a, dir) };
+    if (p.k === 'week') return { ...p, a: addDays(p.a, 7 * dir) };
+    if (p.k === 'month') { const [y, m] = p.a.split('-').map(Number); return { ...p, a: new Date(y, m - 1 + dir, 1, 12).toLocaleDateString('sv-SE') }; }
+    return p;
+  }
+  // Разметка: переключатель вида + строка «‹ Ноябрь 2026 ›»; нажатие на подпись — свой период (две даты)
+  function periodBar(p, opts = {}) {
+    const kinds = PERIOD_KINDS.filter(([k]) => !(opts.noAll && k === 'all'));
+    const r = periodRange(p), cur = !r || (today() >= r.from && today() <= r.to);
+    return `<div class="per" data-per>
+      <div class="segmented per-k">${kinds.map(([k, l]) => `<button type="button" data-pk="${k}" class="${p.k === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="per-nav">${p.k === 'all' || p.k === 'custom' ? '<span class="per-arr"></span>' : '<button type="button" class="per-arr" data-pd="-1" aria-label="Раньше">‹</button>'}
+        <button type="button" class="per-l ${cur ? '' : 'away'}" data-pc>${esc(periodLabel(p))}</button>
+        ${p.k === 'all' || p.k === 'custom' ? '<span class="per-arr"></span>' : '<button type="button" class="per-arr" data-pd="1" aria-label="Позже">›</button>'}</div>
+      <div class="per-custom hidden"><label>С <input type="date" data-pf value="${r?.from || ''}"></label><label>По <input type="date" data-pt value="${r?.to || today()}"></label>
+        <button type="button" class="chip on" data-pok>Показать</button></div>
+    </div>`;
+  }
+  // Привязка: onChange(новый p) — экран перерисовывает себя. Нажатие на выбранный вид — вернуться к текущему дню/неделе/месяцу
+  function bindPeriod(root, get, onChange) {
+    const box = root.querySelector('[data-per]'); if (!box) return;
+    box.addEventListener('click', (e) => {
+      const p = get();
+      const k = e.target.closest('[data-pk]')?.dataset.pk;
+      if (k) { haptic(); return onChange(k === p.k || k === 'all' ? period(k) : { k, a: k === 'custom' ? today() : p.k === 'custom' || p.k === 'all' ? today() : p.a }); }
+      const d = e.target.closest('[data-pd]')?.dataset.pd;
+      if (d) { haptic(); return onChange(periodShift(p, Number(d))); }
+      if (e.target.closest('[data-pc]')) { box.querySelector('.per-custom').classList.toggle('hidden'); return; }
+      if (e.target.closest('[data-pok]')) {
+        let f = box.querySelector('[data-pf]').value, t = box.querySelector('[data-pt]').value;
+        if (!f || !t) return toast('Укажите обе даты', true);
+        if (t < f) [f, t] = [t, f];
+        haptic(); onChange({ k: 'custom', a: t, from: f, to: t });
+      }
+    });
+  }
+
   // toExcel(имя, заголовки, строки, ширины) — один лист; toExcel(имя, [{ name, head, rows, widths }, …]) — несколько листов
   async function toExcel(fileName, head, rows, widths) {
     try { await loadXLSX(); } catch (e) { toast(e.message, true); return; }
@@ -453,5 +516,6 @@
 
   window.App = { sb, repClient, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches, rank, mark, canon,
     PAY, payView, docNo, ORD, dayGroups, monthOrder, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON,
-    hue, av, skeleton, docIcon, ageCls, moneyOrDash, setFz, getFz, loadXLSX, toExcel };
+    hue, av, skeleton, docIcon, ageCls, moneyOrDash, setFz, getFz, loadXLSX, toExcel,
+    period, periodRange, periodLabel, periodShift, periodBar, bindPeriod, inPeriod };
 })();

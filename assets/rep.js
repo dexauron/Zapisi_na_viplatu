@@ -85,7 +85,12 @@
     const d = A.toCents(o.actual) - A.toCents(o.amount);
     return `пришло ${A.fmtMoney(o.actual)}${d ? ` (${d > 0 ? '+' : '−'}${A.fmtMoney(Math.abs(d) / 100)})` : ''}`;
   };
-  const st = { tab: 'orders', filter: null, q: '' };
+  // Период по умолчанию — текущий месяц. Ожидаемые заказы и неоплаченные записи видны всегда; поиск — по всем датам
+  const st = { tab: 'orders', filter: null, q: '', per: A.period('month') };
+  const inPer = (d) => !!st.q || A.inPeriod(st.per, d);
+  const vOrders = () => orders.filter((o) => o.status === 'ordered' || inPer(o.delivered_at?.slice(0, 10) || o.date));
+  const vPayouts = () => payouts.filter((p) => p.status !== 'paid' || inPer(p.date));
+  const vDocs = () => docs.filter((d) => inPer(d.date));
   document.getElementById('nav-title').textContent = data.rep.full_name;
   document.title = data.rep.full_name;
 
@@ -94,6 +99,7 @@
     <div class="subtitle">${A.esc([data.shop ? `Магазин «${data.shop}»` : '', data.rep.company].filter(Boolean).join(' · ') || 'Торговый представитель')}</div>
     <div class="segmented" id="seg"><button data-t="orders" class="on">Заказы · ${orders.length}</button><button data-t="payouts">Выплаты · ${payouts.length}</button>${docs.length ? `<button data-t="docs">Накладные · ${docs.length}</button>` : ''}</div>
     ${A.searchBox('q', 'Магазин, №, сумма, комментарий')}
+    <div id="per"></div>
     <div class="stats" id="stats"></div>
     <div id="list"></div>`;
 
@@ -104,29 +110,35 @@
     $('seg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
     render();
   });
-  A.bindSearch($('q'), () => { st.q = $('q').value; renderList(); });
+  A.bindSearch($('q'), () => { st.q = $('q').value; render(); });
+  function renderPer() {
+    $('per').innerHTML = st.q.trim() ? '' : A.periodBar(st.per);
+    A.bindPeriod($('per'), () => st.per, (np) => { st.per = np; st.filter = null; render(); });
+  }
 
   function statsDef() {
     if (st.tab === 'orders') {
-      const by = (k) => orders.filter((o) => (k === 'wait' ? o.status === 'ordered' : o.view.key === k));
+      const os = vOrders(), by = (k) => os.filter((o) => (k === 'wait' ? o.status === 'ordered' : o.view.key === k));
       return [
         ['wait', 'Ожидается', 'blue', by('wait')],
         ['late', 'Просрочено', 'red', by('late')],
         ['delivered', 'Пришло', 'green', by('delivered')],
-        [null, 'Все заказы', 'gray', orders.filter((o) => o.status !== 'cancelled')],
+        [null, 'Все заказы', 'gray', os.filter((o) => o.status !== 'cancelled')],
       ];
     }
     if (st.tab === 'docs') {
+      const ds = vDocs();
       return [
-        ['in', 'Приход', 'blue', docs.filter((d) => d.kind === 'in')],
-        ['pay', 'Оплачено', 'green', docs.filter((d) => d.kind === 'pay')],
-        ['ret', 'Возвраты', 'orange', docs.filter((d) => d.kind === 'ret')],
+        ['in', 'Приход', 'blue', ds.filter((d) => d.kind === 'in')],
+        ['pay', 'Оплачено', 'green', ds.filter((d) => d.kind === 'pay')],
+        ['ret', 'Возвраты', 'orange', ds.filter((d) => d.kind === 'ret')],
         ...(data.debt != null ? [[null, 'Долг магазина', 'gray', [], Math.max(0, Number(data.debt))]] : []),
       ];
     }
+    const ps = vPayouts();
     return [
-      ['to_pay', 'Не оплачено', 'orange', payouts.filter((p) => p.status !== 'paid')],
-      ['paid', 'Оплачено', 'green', payouts.filter((p) => p.status === 'paid')],
+      ['to_pay', 'Не оплачено', 'orange', ps.filter((p) => p.status !== 'paid')],
+      ['paid', 'Оплачено', 'green', ps.filter((p) => p.status === 'paid')],
     ];
   }
   function renderStats() {
@@ -141,20 +153,20 @@
 
   function rowsNow() {
     if (st.tab === 'orders') {
-      return orders.filter((o) => (!st.filter || (st.filter === 'wait' ? o.status === 'ordered' : o.view.key === st.filter))
+      return vOrders().filter((o) => (!st.filter || (st.filter === 'wait' ? o.status === 'ordered' : o.view.key === st.filter))
         && A.matches(st.q, o.store, o.order_no, o.comment, o.amount, A.fmtMoney(o.amount), A.fmtDate(o.date), o.view.label));
     }
     if (st.tab === 'docs') {
-      return docs.filter((d) => (!st.filter || d.kind === st.filter) && A.matches(st.q, d.num, shortNum(d.num), d.in_no, DOC[d.kind] || d.title, d.amount, A.fmtMoney(d.amount), A.fmtDate(d.date)));
+      return vDocs().filter((d) => (!st.filter || d.kind === st.filter) && A.matches(st.q, d.num, shortNum(d.num), d.in_no, DOC[d.kind] || d.title, d.amount, A.fmtMoney(d.amount), A.fmtDate(d.date)));
     }
-    return payouts.filter((p) => (!st.filter || (st.filter === 'paid') === (p.status === 'paid'))
+    return vPayouts().filter((p) => (!st.filter || (st.filter === 'paid') === (p.status === 'paid'))
       && A.matches(st.q, p.invoice_no, p.store, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.date), A.payView(p.status).label));
   }
 
   function renderList() {
     const rows = rowsNow();
     const actBtn = st.tab === 'docs' && window.Act && docs.some((d) => d.inc != null) ? '<button class="btn plain" type="button" id="act" style="margin:0 0 4px">Акт сверки · PDF</button>' : '';
-    if (!rows.length) { $('list').innerHTML = actBtn + A.emptyState(st.q ? 'Ничего не найдено' : 'Записей нет', st.q ? 'Измените запрос' : ''); $('act')?.addEventListener('click', openAct); return; }
+    if (!rows.length) { $('list').innerHTML = actBtn + A.emptyState(st.q ? 'Ничего не найдено' : 'За период записей нет', st.q ? 'Поиск идёт по всем датам' : 'Выберите другой период'); $('act')?.addEventListener('click', openAct); return; }
     let html = actBtn;
     // сегодня/текущий месяц — первыми, затем будущие, прошедшие — в конце (новые сверху)
     const t = A.today(), rk = (d) => (d === t ? 0 : d > t ? 1 : 2);
@@ -224,7 +236,7 @@
     }
   }
 
-  function render() { renderStats(); renderList(); }
+  function render() { renderPer(); renderStats(); renderList(); }
   render();
 
   // Вернулись на вкладку через минуту и больше — показать свежие данные

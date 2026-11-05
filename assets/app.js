@@ -181,6 +181,27 @@
       A.bindSearch($('q'), () => { st.q[segKey] = $('q').value; render.body(); }); }
   }
   const setBody = (html) => { $('body').innerHTML = html; };
+  // Периоды по умолчанию: заказы — неделя, выплаты — месяц, 1С — месяц, история — неделя
+  st.per = { orders: A.period('week'), payouts: A.period('month'), one: A.period('month'), hist: A.period('week') };
+  // При старте загружены последние 90 дней. Давний период (или поиск по всем датам) — дозагрузить с сервера и перерисовать
+  let loadedFrom = A.addDays(A.today(), -90), loadingFrom = null;
+  async function withRange(p, redraw) {
+    const r = A.periodRange(p), from = r ? r.from : '2000-01-01';
+    if (from >= loadedFrom || !navigator.onLine || (loadingFrom && loadingFrom <= from)) return;
+    loadingFrom = from;
+    try {
+      const page = async (table, col) => {
+        const out = [];
+        for (let i = 0; ; i += 1000) {
+          const { data, error } = await sb.from(table).select('*').gte(col, from).lt(col, loadedFrom).order(col).range(i, i + 999);
+          if (error) throw error; out.push(...data); if (data.length < 1000) return out;
+        }
+      };
+      const [o, p2] = await Promise.all([page('orders', 'order_date'), isAdmin() ? page('payouts', 'payout_date') : []]);
+      mergeRows(st.orders, o); mergeRows(st.payouts, p2); loadedFrom = from;
+      redraw();
+    } catch (e) { if (!isNetErr(e)) A.toast(humanError(e), true); } finally { loadingFrom = null; }
+  }
   // Значение плитки итогов: ноль — прочерком, чтобы глаз цеплялся за непустое
   const statV = (sum) => (Number(sum) ? `<div class="v">${A.fmtMoney(sum)}</div>` : '<div class="v none">—</div>');
 
@@ -230,29 +251,33 @@
     return A.matches(st.q.orders, r?.full_name, r?.company, s?.name, o.order_no, o.comment, o.amount, A.fmtMoney(o.amount), A.fmtDate(o.order_date), staffName(o.created_by));
   }
   function renderOrdersBody() {
-    const seg = st.seg.orders, month = A.today().slice(0, 7);
-    const delivIn = (o) => o.status === 'delivered' && (o.delivered_at?.slice(0, 7) || o.order_date.slice(0, 7)) === month;
-    const waitAll = st.orders.filter((o) => o.status === 'ordered'), delivM = st.orders.filter(delivIn);
-    const mName = new Date(A.today() + 'T12:00:00').toLocaleDateString('ru-RU', { month: 'long' });
-    // плитки итогов — они же фильтр; повторное нажатие — все заказы
-    let rows = st.orders.filter(orderMatches);
-    let html = `<div class="stats">
+    const seg = st.seg.orders, t = A.today(), q = (st.q.orders || '').trim(), P = st.per.orders, r = A.periodRange(P);
+    // в выбранном периоде; ожидаемые с прошедшей датой и без даты видны всегда. Поиск — по всем датам
+    const inView = (o) => !!q || !r || (o.status === 'ordered' ? !o.expected_date || o.expected_date < t || A.inPeriod(P, o.expected_date)
+      : A.inPeriod(P, o.status === 'delivered' ? o.delivered_at?.slice(0, 10) || o.order_date : o.order_date));
+    const view = st.orders.filter(inView);
+    const waitAll = view.filter((o) => o.status === 'ordered'), deliv = view.filter((o) => o.status === 'delivered');
+    // плитки итогов — они же фильтр; повторное нажатие — все заказы периода
+    let rows = view.filter(orderMatches);
+    let html = (q ? '' : A.periodBar(P)) + `<div class="stats">
       <button class="stat ${seg === 'wait' ? 'on' : ''}" data-oseg="wait"><div class="k"><span class="dot" style="background:var(--blue)"></span>Ожидается · ${waitAll.length}</div>${statV(A.sum(waitAll))}</button>
-      <button class="stat ${seg === 'delivered' ? 'on' : ''}" data-oseg="delivered"><div class="k"><span class="dot" style="background:var(--green)"></span>Пришли, ${E(mName)} · ${delivM.length}</div>${statV(A.sum(delivM))}</button></div>
-      ${seg !== 'all' ? `<button class="chip filter-chip" type="button" data-oseg="${seg}">${seg === 'wait' ? 'Только ожидаемые' : 'Только пришедшие в этом месяце'} ✕</button>` : ''}`;
+      <button class="stat ${seg === 'delivered' ? 'on' : ''}" data-oseg="delivered"><div class="k"><span class="dot" style="background:var(--green)"></span>Пришли · ${deliv.length}</div>${statV(A.sum(deliv))}</button></div>
+      ${seg !== 'all' ? `<button class="chip filter-chip" type="button" data-oseg="${seg}">${seg === 'wait' ? 'Только ожидаемые' : 'Только пришедшие'} ✕</button>` : ''}`;
     if (seg === 'wait') {
       rows = rows.filter((o) => o.status === 'ordered')
         .sort((a, b) => (a.expected_date || '9999').localeCompare(b.expected_date || '9999'));
       html += dateSections(rows, (o) => o.expected_date, orderCell, { pastLabel: 'Просрочено', pastRed: true,
         title: (g) => (g.key === 'none' ? 'Без даты прихода' : null) });
     } else {
-      if (seg === 'delivered') rows = rows.filter(delivIn);
+      if (seg === 'delivered') rows = rows.filter((o) => o.status === 'delivered');
       const dateOf = seg === 'delivered' ? (o) => o.delivered_at?.slice(0, 10) || o.order_date : (o) => o.order_date;
       html += dateSections(rows, dateOf, orderCell, { pastLabel: seg === 'delivered' ? false : 'Прошедшие' });
     }
-    if (!rows.length) html += A.emptyState(st.q.orders ? 'Ничего не найдено' : seg === 'wait' ? 'Нет ожидаемых заказов' : 'Заказов нет',
-      st.q.orders ? 'Измените запрос' : 'Нажмите «+», чтобы записать заказ');
+    if (!rows.length) html += A.emptyState(q ? 'Ничего не найдено' : seg === 'wait' ? 'Нет ожидаемых заказов' : 'Заказов за период нет',
+      q ? 'Поиск идёт по всем датам' : 'Выберите другой период или нажмите «+»');
     setBody(html);
+    A.bindPeriod($('body'), () => st.per.orders, (np) => { st.per.orders = np; renderOrdersBody(); withRange(np, () => st.tab === 'orders' && renderOrdersBody()); });
+    if (q) withRange(A.period('all'), () => st.tab === 'orders' && renderOrdersBody());
     $('body').querySelectorAll('[data-oseg]').forEach((b) => b.addEventListener('click', () => {
       A.haptic(); st.seg.orders = st.seg.orders === b.dataset.oseg ? 'all' : b.dataset.oseg; renderOrdersBody();
     }));
@@ -470,33 +495,36 @@
     render.body = renderPayoutsBody; renderPayoutsBody();
   }
   function renderPayoutsBody() {
-    const seg = st.seg.payouts;
+    const seg = st.seg.payouts, t0 = A.today(), q0 = (st.q.payouts || '').trim(), P = st.per.payouts, per = A.periodRange(P);
     const isPaid = (p) => p.status === 'paid';
-    const month = A.today().slice(0, 7), paidIn = (p) => isPaid(p) && (p.paid_at || p.payout_date).slice(0, 7) === month;
-    // плитки итогов — они же фильтр: «Не оплачено» / «Оплачено в этом месяце»; повторное нажатие — все записи
-    const rows = st.payouts.filter((p) => (seg === 'all' || (seg === 'paid' ? paidIn(p) : !isPaid(p))) && A.matches(st.q.payouts,
+    // в выбранном периоде (по дате записи); неоплаченные с прошедшей датой видны всегда. Поиск — по всем датам
+    const inView = (p) => !!q0 || !per || (!isPaid(p) && p.payout_date < t0) || A.inPeriod(P, p.payout_date);
+    const view = st.payouts.filter(inView);
+    // плитки итогов — они же фильтр: «Не оплачено» / «Оплачено»; повторное нажатие — все записи периода
+    const rows = view.filter((p) => (seg === 'all' || (seg === 'paid') === isPaid(p)) && A.matches(st.q.payouts,
       repById(p.rep_id)?.full_name, repById(p.rep_id)?.company, p.invoice_no, storeById(p.store_id)?.name, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.payout_date)));
-    const open = st.payouts.filter((p) => !isPaid(p)), paidM = st.payouts.filter(paidIn);
-    const mName = new Date(A.today() + 'T12:00:00').toLocaleDateString('ru-RU', { month: 'long' });
-    let html = `<div class="stats">
+    const open = view.filter((p) => !isPaid(p)), paidM = view.filter(isPaid);
+    let html = (q0 ? '' : A.periodBar(P)) + `<div class="stats">
       <button class="stat ${seg === 'to_pay' ? 'on' : ''}" data-seg="to_pay"><div class="k"><span class="dot" style="background:var(--orange)"></span>Не оплачено · ${open.length}</div>${statV(A.sum(open))}</button>
-      <button class="stat ${seg === 'paid' ? 'on' : ''}" data-seg="paid"><div class="k"><span class="dot" style="background:var(--green)"></span>Оплачено, ${E(mName)} · ${paidM.length}</div>${statV(A.sum(paidM))}</button></div>
-      ${seg !== 'all' ? `<button class="chip filter-chip" type="button" data-seg="${seg}">${seg === 'paid' ? 'Только оплаченные в этом месяце' : 'Только неоплаченные'} ✕</button>` : ''}`;
+      <button class="stat ${seg === 'paid' ? 'on' : ''}" data-seg="paid"><div class="k"><span class="dot" style="background:var(--green)"></span>Оплачено · ${paidM.length}</div>${statV(A.sum(paidM))}</button></div>
+      ${seg !== 'all' ? `<button class="chip filter-chip" type="button" data-seg="${seg}">${seg === 'paid' ? 'Только оплаченные' : 'Только неоплаченные'} ✕</button>` : ''}`;
     const t = A.today(), pc = (x, c) => payoutCell(x, undefined, '', c);
     const ahead = rows.filter((p) => p.payout_date >= t), late = rows.filter((p) => p.payout_date < t && !isPaid(p)), done = rows.filter((p) => p.payout_date < t && isPaid(p));
     html += dateSections(ahead, (p) => p.payout_date, pc, { pastLabel: false });
     if (late.length) html += `<div class="past-sep red"><span>Просрочено · ${A.fmtMoney(A.sum(late))}</span></div>` + dateSections(late, (p) => p.payout_date, pc, { pastLabel: false, pastRed: true });
     html += dateSections(done, (p) => p.payout_date, pc, { pastLabel: 'Оплачено раньше' });
     const q = (st.q.payouts || '').trim();
-    if (!rows.length && !q) html += A.emptyState('Выплат нет', 'Нажмите «+», чтобы добавить запись');
+    if (!rows.length && !q) html += A.emptyState('Выплат за период нет', 'Выберите другой период или нажмите «+»');
     if (rows.length) html += `<button class="btn plain" type="button" id="pay-xls">Выгрузить в Excel · ${rows.length}</button>`;
     if (q) html += '<div id="inv-found"></div>';
     setBody(html);
+    A.bindPeriod($('body'), () => st.per.payouts, (np) => { st.per.payouts = np; renderPayoutsBody(); withRange(np, () => st.tab === 'payouts' && renderPayoutsBody()); });
+    if (q) withRange(A.period('all'), () => st.tab === 'payouts' && renderPayoutsBody());
     $('body').querySelectorAll('[data-seg]').forEach((b) => b.addEventListener('click', () => {
       A.haptic(); st.seg.payouts = st.seg.payouts === b.dataset.seg ? 'all' : b.dataset.seg; renderPayoutsBody();
     }));
     bindCells($('body'));
-    $('pay-xls')?.addEventListener('click', () => A.toExcel(`Выплаты ${A.fmtDate(A.today())}`,
+    $('pay-xls')?.addEventListener('click', () => A.toExcel(`Выплаты ${q ? 'поиск' : A.periodLabel(P)}`,
       ['Дата', 'Поставщик', 'ИП / компания', '№ накладной', 'Сумма', 'Статус', 'Оплачено', 'Получил', 'Основание', 'Комментарий'],
       rows.map((p) => { const r = repById(p.rep_id); return [p.payout_date, r?.full_name || '', r?.company || '', p.invoice_no || '', Number(p.amount),
         A.payView(p.status).label, p.paid_at ? p.paid_at.slice(0, 10) : '', p.received_at ? p.received_at.slice(0, 10) : '', p.basis || '', p.comment || '']; }),
@@ -1385,7 +1413,7 @@
         Повторная загрузка обновляет изменения, копий не будет.</div>`;
     $('body').addEventListener('click', oneClick);
     render.body = drawOneList;
-    drawOneTop(); drawOneList();
+    drawOneList.qs = !!(st.q.sum || '').trim(); drawOneTop(); drawOneList();
     if (!navigator.onLine) { if (!st.one.rows) $('one-list').innerHTML = A.emptyState('Нет сети', 'Документы 1С считаются на сервере'); return; }
     const my = ++st.one.seq;
     Promise.all([sb.rpc('summary_stats'), sb.rpc('open_invoices')]).then(([a, b]) => {
@@ -1425,27 +1453,40 @@
       html += `<div class="section-h"><span>Приход и оплаты по месяцам</span></div>
         <div class="chart"><div class="legend"><span><i style="background:var(--c-in)"></i>Пришло</span><span><i style="background:var(--c-pay)"></i>Оплачено</span></div>
           <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Приход и оплаты по месяцам"><g class="grid">${grid}</g>${marks}</svg>
-          <div class="tip" id="s-tip"></div></div>`;
+          <div class="footer-note" style="margin:6px 4px 0">Нажмите на месяц — цифры за него появятся выше.</div></div>`;
     }
+    // «За период»: пришло, оплачено, возвраты — по выбранному дню, неделе, месяцу или своему периоду
+    const perHtml = `<div class="section-h"><span>За период</span></div>${A.periodBar(st.per.one)}<div id="one-per">${A.skeleton(1)}</div>`;
+    const at = html.indexOf('<div class="section-h"><span>Приход и оплаты');
+    html = at < 0 ? html + perHtml : html.slice(0, at) + perHtml + html.slice(at);
     box.innerHTML = html;
-    if (!months.length) return;
-    const tip = (i) => {
-      const m = months[i], mo = Number(m.m.slice(5)) - 1, diff = Number(m.in) - Number(m.pay) - Number(m.ret);
-      box.querySelectorAll('.hit').forEach((h) => h.classList.toggle('on', Number(h.dataset.m) === i));
-      $('s-tip').innerHTML = `<div class="m">${MON[mo][0].toUpperCase() + MON[mo].slice(1)} ${m.m.slice(0, 4)}</div>
-        <span>Пришло</span><em>${A.fmtMoney(m.in)}</em><span>Оплачено</span><em>${A.fmtMoney(m.pay)}</em>
-        <span>Возвраты</span><em>${A.fmtMoney(m.ret)}</em><span>${diff >= 0 ? 'Долг вырос на' : 'Долг уменьшился на'}</span><em>${A.fmtMoney(Math.abs(diff))}</em>`;
-    };
-    const svg = box.querySelector('svg');
-    svg.addEventListener('click', (e) => { const h = e.target.closest('.hit'); if (h) { A.haptic(); tip(Number(h.dataset.m)); } });
-    svg.addEventListener('mousemove', (e) => { const h = e.target.closest('.hit'); if (h && !h.classList.contains('on')) tip(Number(h.dataset.m)); });
-    tip(months.length - 1);
+    A.bindPeriod(box, () => st.per.one, (np) => { st.per.one = np; drawOneTop(); });
+    const P = st.per.one, sel = P.k === 'month' ? P.a.slice(0, 7) : null;
+    box.querySelectorAll('.hit').forEach((h) => h.classList.toggle('on', months[Number(h.dataset.m)]?.m === sel));
+    box.querySelector('svg')?.addEventListener('click', (e) => {
+      const h = e.target.closest('.hit'); if (!h) return;
+      A.haptic(); st.per.one = A.period('month', months[Number(h.dataset.m)].m + '-01'); drawOneTop();
+    });
+    const r = A.periodRange(P) || { from: '2000-01-01', to: A.today() }, my = ++drawOneTop.seq;
+    sb.rpc('docs_stats', { p_from: r.from, p_to: r.to }).then(({ data, error }) => {
+      const el = $('one-per'); if (!el || my !== drawOneTop.seq) return;
+      if (error) { el.innerHTML = `<div class="footer-note warn">${E(humanError(error))}</div>`; return; }
+      const v = (k) => Number(data?.[k]?.sum || 0), n = (k) => Number(data?.[k]?.n || 0);
+      const diff = v('in') - v('pay') - v('ret');
+      el.innerHTML = `<div class="per-card">
+        <span>Пришло${n('in') ? ` · ${n('in').toLocaleString('ru-RU')} накл.` : ''}</span><em>${A.moneyOrDash(v('in'))}</em>
+        <span>Оплачено${n('pay') ? ` · ${n('pay').toLocaleString('ru-RU')}` : ''}</span><em>${A.moneyOrDash(v('pay'))}</em>
+        <span>Возвраты${n('ret') ? ` · ${n('ret').toLocaleString('ru-RU')}` : ''}</span><em>${A.moneyOrDash(v('ret'))}</em>
+        <span class="tot">${!diff ? 'Долг не изменился' : diff > 0 ? 'Долг вырос на' : 'Долг уменьшился на'}</span><em class="tot">${A.moneyOrDash(Math.abs(diff))}</em></div>`;
+    });
   }
+  drawOneTop.seq = 0;
   // Неоплаченные накладные: фильтр «все / без записи», вид «по поставщикам / по накладным», поиск — строкой вверху
   const oneRows = () => (st.one.rows || []).filter((d) => st.one.flt === 'all' || !d.rec);
   const openSum = (rows) => rows.reduce((a, d) => a + A.toCents(d.open), 0) / 100;
   function drawOneList() {
-    drawOneTop();
+    // верх перерисовывается только когда поиск начался или закончился (при поиске он скрыт)
+    const qs = !!(st.q.sum || '').trim(); if (qs !== drawOneList.qs) { drawOneList.qs = qs; drawOneTop(); }
     const box = $('one-list'); if (!box || !st.one.rows) return;
     const all = st.one.rows, norec = all.filter((d) => !d.rec), rows = oneRows(), q = (st.q.sum || '').trim(), { view, limit } = st.one;
     let html = `<div class="section-h"><span>Не оплачено</span><span>${A.fmtMoney(openSum(rows))}</span></div>
@@ -1716,25 +1757,31 @@
     }
     return html || A.emptyState('Изменений пока нет');
   }
-  async function loadHistory(filter, box, limit = 100) {
+  async function loadHistory(filter, box, limit = 100, range = null) {
     // 'fill' — старые отметки «пустое поле заполнено из 1С»: не изменения, не показываем
     let q = sb.from('audit_log').select('*').neq('action', 'fill').order('at', { ascending: false }).limit(limit);
+    if (range) q = q.gte('at', new Date(range.from + 'T00:00:00').toISOString()).lt('at', new Date(A.addDays(range.to, 1) + 'T00:00:00').toISOString());
     for (const [k, v] of Object.entries(filter)) q = Array.isArray(v) ? q.in(k, v) : q.eq(k, v);
     const { data, error } = await q;
     if (!box.isConnected) return;
     if (error) { box.innerHTML = A.emptyState('Не удалось загрузить историю'); return; }
+    if (!data.length && range) { box.innerHTML = A.emptyState('За период изменений нет', 'Выберите другой период'); return; }
     box.innerHTML = filter.entity_id ? (data.length ? `<div class="list">${histCells(data.slice().reverse())}</div>` : '') : histGrouped(data);
   }
   function historySheet() {
     const api = A.sheet({ title: 'История изменений', left: 'Закрыть', body: `
       <div class="segmented" id="hseg" style="margin-top:8px"><button data-k="all" class="on">Все</button><button data-k="orders">Заказы</button><button data-k="payouts">Выплаты</button><button data-k="reps">Справочник</button><button data-k="docs">1С</button></div>
-      <div id="hbox">${A.skeleton(8, true)}</div>` });
-    const box = api.body.querySelector('#hbox');
+      <div id="hper"></div><div id="hbox">${A.skeleton(8, true)}</div>` });
+    const box = api.body.querySelector('#hbox'), perBox = api.body.querySelector('#hper');
+    let cur = 'all';
+    const drawPer = () => { perBox.innerHTML = A.periodBar(st.per.hist); A.bindPeriod(perBox, () => st.per.hist, (np) => { st.per.hist = np; drawPer(); show(cur); }); };
     const show = (k) => {
+      cur = k;
       api.body.querySelectorAll('#hseg button').forEach((b) => b.classList.toggle('on', b.dataset.k === k));
       box.innerHTML = A.skeleton(8, true);
-      loadHistory(k === 'all' ? {} : { entity: k === 'reps' ? ['reps', 'stores', 'import'] : k }, box, 300);
+      loadHistory(k === 'all' ? {} : { entity: k === 'reps' ? ['reps', 'stores', 'import'] : k }, box, 1000, A.periodRange(st.per.hist));
     };
+    drawPer();
     api.body.querySelector('#hseg').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) show(k); });
     show('all');
   }
@@ -1962,20 +2009,18 @@
   // ---------- 1С: удалить загруженные документы за период ----------
   const KIND1C = [['in', 'Приходы'], ['pay', 'Расходники (оплаты)'], ['ret', 'Возвраты'], ['other', 'Прочее']];
   function purge1C() {
-    const t = A.today(), m0 = t.slice(0, 8) + '01';
     const sel = new Set();
-    let stats = {}, seq = 0;
+    let stats = {}, seq = 0, per = A.period('month');   // по умолчанию — текущий месяц
     const api = A.sheet({ title: 'Удалить из 1С', left: 'Отмена', body: `
-      <div class="section-h"><span>Период документов</span></div><div class="list">
-        ${field('С', `<input name="from" type="date" value="${m0}" max="${t}">`)}
-        ${field('По', `<input name="to" type="date" value="${t}">`)}
-      </div>
+      <div class="section-h"><span>Период документов</span></div><div id="pper"></div>
       <div class="section-h"><span>Что удалить</span></div><div class="list" id="pk"></div>
       <div id="pmsg"></div>
       <button class="btn red" type="button" data-act="go" disabled>Удалить</button>
       <div class="footer-note">Документы стираются из базы полностью. Записи на выплату и заказы останутся — у них снимется только связь с удалёнными накладными.
         Повторная загрузка того же файла вернёт документы.</div>` });
-    const f = api.body, v = (n) => f.querySelector(`[name=${n}]`).value;
+    const f = api.body, v = (n) => (A.periodRange(per) || {})[n === 'from' ? 'from' : 'to'];
+    const drawPer = () => { const b = f.querySelector('#pper'); b.innerHTML = A.periodBar(per, { noAll: true });
+      A.bindPeriod(b, () => per, (np) => { per = np; drawPer(); load(); }); };
     const total = () => KIND1C.filter(([k]) => sel.has(k)).reduce((a, [k]) => ({ n: a.n + (stats[k]?.n || 0), sum: a.sum + Number(stats[k]?.sum || 0) }), { n: 0, sum: 0 });
     const draw = () => {
       f.querySelector('#pk').innerHTML = KIND1C.map(([k, l]) => `<button type="button" class="cell inv-pick ${sel.has(k) ? 'on' : ''}" data-k="${k}" ${stats[k]?.n ? '' : 'disabled'}>
@@ -1994,7 +2039,7 @@
       stats = data || {}; for (const k of [...sel]) if (!stats[k]?.n) sel.delete(k);
       draw();
     };
-    f.querySelectorAll('input[type=date]').forEach((i) => i.addEventListener('change', load));
+    drawPer();
     f.querySelector('#pk').addEventListener('click', (e) => {
       const b = e.target.closest('[data-k]'); if (!b || b.disabled) return;
       A.haptic(); sel.has(b.dataset.k) ? sel.delete(b.dataset.k) : sel.add(b.dataset.k); draw();

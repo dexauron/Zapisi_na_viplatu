@@ -18,6 +18,7 @@
     { id: 'today', label: 'Сегодня', icon: SVG('M7 2h2v2h6V2h2v2h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2V2ZM5 9v10h14V9H5Zm2 2h4v4H7v-4Z') },
     { id: 'orders', label: 'Заказы', icon: SVG('M7 4h10l1 3h3v2h-1.3l-1.6 10.2A2 2 0 0 1 16.1 21H7.9a2 2 0 0 1-2-1.8L4.3 9H3V7h3l1-3Zm-.7 5 1.6 10h8.2l1.6-10H6.3ZM8.4 6l-.3 1h7.8l-.3-1H8.4Z') },
     { id: 'payouts', label: 'Выплаты', admin: true, icon: SVG('M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Zm1 2v8h16V8H4Zm8 1.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM6 10h2v4H6v-4Zm10 0h2v4h-2v-4Z') },
+    { id: 'sum', label: 'Сводка', admin: true, icon: SVG('M4 20V10h3v10H4Zm6.5 0V4h3v16h-3ZM17 20v-7h3v7h-3Z') },
     { id: 'dir', label: 'Представители', icon: SVG('M9 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm-7 14c0-3.3 3.1-5 7-5s7 1.7 7 5v1H2v-1Zm2.2-1h9.6c-.5-1.3-2.3-2-4.8-2s-4.3.7-4.8 2ZM16.5 5a3.5 3.5 0 0 1 0 7v-2a1.5 1.5 0 0 0 0-3V5Zm1.3 10c2.5.4 4.2 1.8 4.2 4v2h-3v-2c0-1.3-.6-2.4-1.2-3.1V15Z') },
     // «Ещё» внизу не показывается: его открывает кнопка с тремя чёрточками справа вверху
     { id: 'more', label: 'Ещё', top: true },
@@ -88,7 +89,7 @@
   }
   function hasSavedSession() { try { return Object.keys(localStorage).some((k) => /^sb-.*-auth-token$/.test(k)); } catch { return false; } }
   function showApp() {
-    if (!isAdmin() && st.tab === 'payouts') st.tab = 'today';
+    if (!isAdmin() && (st.tab === 'payouts' || st.tab === 'sum')) st.tab = 'today';
     $('boot').classList.add('hidden');
     ['nav', 'page', 'tabbar'].forEach((id) => $(id).classList.remove('hidden'));
     document.body.classList.add('app-on');
@@ -164,10 +165,10 @@
   function render() {
     const t = TABS.find((x) => x.id === st.tab);
     $('nav-title').textContent = t.label;
-    $('nav-plus').style.visibility = st.tab === 'more' && !isAdmin() ? 'hidden' : 'visible';
+    $('nav-plus').style.visibility = (st.tab === 'more' && !isAdmin()) || st.tab === 'sum' ? 'hidden' : 'visible';
     $('nav-more').style.visibility = st.tab === 'more' ? 'hidden' : 'visible';
     $('nav-left').textContent = st.tab === 'more' ? '\u2039 Назад' : '';
-    ({ today: renderToday, orders: renderOrders, payouts: renderPayouts, dir: renderDir, more: renderMore })[st.tab]();
+    ({ today: renderToday, orders: renderOrders, payouts: renderPayouts, sum: renderSummary, dir: renderDir, more: renderMore })[st.tab]();
     renderTabs();
   }
   // Каркас вкладки: заголовок, сегменты, поиск; список перерисовывается отдельно, чтобы поиск не терял фокус
@@ -180,6 +181,8 @@
       A.bindSearch($('q'), () => { st.q[segKey] = $('q').value; render.body(); }); }
   }
   const setBody = (html) => { $('body').innerHTML = html; };
+  // Значение плитки итогов: ноль — прочерком, чтобы глаз цеплялся за непустое
+  const statV = (sum) => (Number(sum) ? `<div class="v">${A.fmtMoney(sum)}</div>` : '<div class="v none">—</div>');
 
   // Внутри группы: ИП/компания, у которой здесь 2+ строки, — заголовок ветки и вложенные строки (по алфавиту).
   // cell(x, child) рисует строку; заголовок ветки сворачивается нажатием.
@@ -218,7 +221,7 @@
   // ЗАКАЗЫ
   // =====================================================================
   function renderOrders() {
-    frame('Заказы', [['wait', 'Ожидаются'], ['delivered', 'Пришли'], ['all', 'Все']], 'orders', 'Представитель, №, сумма');
+    frame('Заказы', [['wait', 'Ожидаются'], ['delivered', 'Пришли'], ['all', 'Все']], 'orders', 'Имя, № заказа, сумма');
     render.body = renderOrdersBody; renderOrdersBody();
   }
   function orderMatches(o) {
@@ -234,8 +237,8 @@
         .sort((a, b) => (a.expected_date || '9999').localeCompare(b.expected_date || '9999'));
       const late = rows.filter((o) => ordView(o).key === 'late');
       html += `<div class="stats">
-        <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--blue)"></span>Ожидается · ${rows.length}</div><div class="v">${A.fmtMoney(A.sum(rows))}</div></div>
-        <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--red)"></span>Просрочено · ${late.length}</div><div class="v">${A.fmtMoney(A.sum(late))}</div></div></div>`;
+        <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--blue)"></span>Ожидается · ${rows.length}</div>${statV(A.sum(rows))}</div>
+        <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--red)"></span>Просрочено · ${late.length}</div>${statV(A.sum(late))}</div></div>`;
       html += dateSections(rows, (o) => o.expected_date, orderCell, { pastLabel: 'Просрочено', pastRed: true,
         title: (g) => (g.key === 'none' ? 'Без даты прихода' : null) });
     } else {
@@ -256,7 +259,7 @@
   }
   function orderCell(o, child = false) {
     const r = repById(o.rep_id), v = ordView(o);
-    const when = [child ? '' : r?.company, A.orderWhen({ status: o.status, expected: o.expected_date, delivered_at: o.delivered_at }), actualNote(o)].filter(Boolean).join(' · ');
+    const when = [A.orderWhen({ status: o.status, expected: o.expected_date, delivered_at: o.delivered_at }), actualNote(o), child ? '' : r?.company].filter(Boolean).join(' · ');
     return `<button class="cell ${child === true ? 'child' : ''}" data-id="${o.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
       <div class="s">${o._pending ? '<span class="pending">● не отправлено</span> ' : ''}${E(when)}</div></div><div class="r"><div class="amt">${A.fmtMoney(o.amount)}</div>${A.pill(v)}</div></button>`;
   }
@@ -456,7 +459,7 @@
   // =====================================================================
   function renderPayouts() {
     if (!['all', 'to_pay', 'paid'].includes(st.seg.payouts)) st.seg.payouts = 'all';
-    frame('Выплаты', [['all', 'Все'], ['to_pay', 'Записи'], ['paid', 'Оплачено']], 'payouts', 'Представитель, № накладной, сумма');
+    frame('Выплаты', [['all', 'Все'], ['to_pay', 'Записи'], ['paid', 'Оплачено']], 'payouts', 'Имя, № накладной, сумма');
     render.body = renderPayoutsBody; renderPayoutsBody();
   }
   function renderPayoutsBody() {
@@ -467,17 +470,27 @@
     const open = st.payouts.filter((p) => !isPaid(p)), month = A.today().slice(0, 7);
     const paidM = st.payouts.filter((p) => isPaid(p) && (p.paid_at || p.payout_date).slice(0, 7) === month);
     let html = `<div class="stats">
-      <button class="stat ${seg === 'to_pay' ? 'on' : ''}" data-seg="to_pay"><div class="k"><span class="dot" style="background:var(--orange)"></span>Не оплачено · ${open.length}</div><div class="v">${A.fmtMoney(A.sum(open))}</div></button>
-      <button class="stat ${seg === 'paid' ? 'on' : ''}" data-seg="paid"><div class="k"><span class="dot" style="background:var(--green)"></span>Оплачено за месяц</div><div class="v">${A.fmtMoney(A.sum(paidM))}</div></button></div>`;
-    html += dateSections(rows, (p) => p.payout_date, (x, c) => payoutCell(x, undefined, '', c), { pastLabel: seg === 'to_pay' ? 'Просрочено' : 'Прошедшие', pastRed: seg === 'to_pay' });
+      <button class="stat ${seg === 'to_pay' ? 'on' : ''}" data-seg="to_pay"><div class="k"><span class="dot" style="background:var(--orange)"></span>Не оплачено · ${open.length}</div>${statV(A.sum(open))}</button>
+      <button class="stat ${seg === 'paid' ? 'on' : ''}" data-seg="paid"><div class="k"><span class="dot" style="background:var(--green)"></span>Оплачено за месяц</div>${statV(A.sum(paidM))}</button></div>`;
+    const t = A.today(), pc = (x, c) => payoutCell(x, undefined, '', c);
+    const ahead = rows.filter((p) => p.payout_date >= t), late = rows.filter((p) => p.payout_date < t && !isPaid(p)), done = rows.filter((p) => p.payout_date < t && isPaid(p));
+    html += dateSections(ahead, (p) => p.payout_date, pc, { pastLabel: false });
+    if (late.length) html += `<div class="past-sep red"><span>Просрочено · ${A.fmtMoney(A.sum(late))}</span></div>` + dateSections(late, (p) => p.payout_date, pc, { pastLabel: false, pastRed: true });
+    html += dateSections(done, (p) => p.payout_date, pc, { pastLabel: 'Оплачено раньше' });
     const q = (st.q.payouts || '').trim();
     if (!rows.length && !q) html += A.emptyState('Выплат нет', 'Нажмите «+», чтобы добавить запись');
+    if (rows.length) html += `<button class="btn plain" type="button" id="pay-xls">Выгрузить в Excel · ${rows.length}</button>`;
     if (q) html += '<div id="inv-found"></div>';
     setBody(html);
     $('body').querySelectorAll('.stat[data-seg]').forEach((b) => b.addEventListener('click', () => {
       st.seg.payouts = st.seg.payouts === b.dataset.seg ? 'all' : b.dataset.seg; renderPayouts();
     }));
     bindCells($('body'));
+    $('pay-xls')?.addEventListener('click', () => A.toExcel(`Выплаты ${A.fmtDate(A.today())}`,
+      ['Дата', 'Поставщик', 'ИП / компания', '№ накладной', 'Сумма', 'Статус', 'Оплачено', 'Получил', 'Основание', 'Комментарий'],
+      rows.map((p) => { const r = repById(p.rep_id); return [p.payout_date, r?.full_name || '', r?.company || '', p.invoice_no || '', Number(p.amount),
+        A.payView(p.status).label, p.paid_at ? p.paid_at.slice(0, 10) : '', p.received_at ? p.received_at.slice(0, 10) : '', p.basis || '', p.comment || '']; }),
+      [11, 28, 24, 14, 12, 11, 11, 11, 20, 24]));
     if (q) findInvoices(q, rows.length);
   }
   // Поиск накладной 1С по номеру прямо в «Выплатах»: сразу «Записать» или «Оплачено»
@@ -485,7 +498,7 @@
   async function findInvoices(q, localCount) {
     const seq = ++findSeq, box = $('inv-found');
     if (!box) return;
-    box.innerHTML = '<div class="spinner" style="margin:20px auto;width:20px;height:20px"></div>';
+    box.innerHTML = '<div style="margin-top:18px">' + A.skeleton(2) + '</div>';
     const { data, error } = await sb.rpc('find_invoices', { p_q: q });
     if (seq !== findSeq || !box.isConnected) return;
     if (error) { box.innerHTML = isNetErr(error) ? '' : `<div class="footer-note warn">${E(humanError(error))}</div>`; return; }
@@ -529,7 +542,7 @@
   function payoutCell(p, sub, warn = '', child = false) {
     const r = repById(p.rep_id), paid = p.status === 'paid';
     if (sub === true || sub === false) { child = sub; sub = undefined; } // вызов из treeList: (x, child)
-    if (sub === undefined) sub = [child ? '' : r?.company, A.fmtShort(p.payout_date), payNote(p)].filter(Boolean).join(' · ');
+    if (sub === undefined) sub = [A.fmtShort(p.payout_date), payNote(p), child ? '' : r?.company].filter(Boolean).join(' · ');
     return `<button class="cell pay ${paid ? 'paid' : ''} ${child ? 'child' : ''}" data-pay="${p.id}">
       ${isAdmin() ? `<span class="tick" data-tick role="checkbox" aria-checked="${paid}" aria-label="${paid ? 'Снять оплату' : 'Отметить оплаченной'}"></span>` : ''}
       <div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
@@ -639,7 +652,7 @@
         box1c.innerHTML = `<div class="section-h"><span>Долг по 1С · ${data.length} накл.</span><span>${A.fmtMoney(data.reduce((a, d) => a + A.toCents(d.open_amount), 0) / 100)}</span></div>
           <div class="list">${list.map((d) => `<button type="button" class="cell inv-pick ${picked.has(d.id) ? 'on' : ''}" data-doc="${d.id}" ${linked.has(d.id) ? 'disabled' : ''}>
             <span class="pick-ic"></span><div class="main"><div class="t">${E(A.docNo({ ...d, kind: 'in' }))}</div>
-            <div class="s">${E(A.fmtShort(d.doc_at.slice(0, 10)))} · ${days(d)} дн.${linked.has(d.id) ? ' · есть запись' : ''}</div></div>
+            <div class="s">${E(A.fmtShort(d.doc_at.slice(0, 10)))} · <span class="${A.ageCls(days(d))}">${days(d)} дн.</span>${linked.has(d.id) ? ' · есть запись' : ''}</div></div>
             <div class="r"><div class="amt">${A.fmtMoney(d.open_amount)}</div></div></button>`).join('')}
           ${data.length > list.length ? `<button type="button" class="cell action" data-all>Показать все ${data.length}</button>` : ''}
           ${!p && data.length > 1 ? `<button type="button" class="cell action" data-pickall>${sel.length === data.filter((d) => !linked.has(d.id)).length ? 'Снять все' : 'Выбрать все'}</button>` : ''}</div>
@@ -801,8 +814,9 @@
   // Строка торгового; child — внутри ветки ИП (компания уже видна в заголовке ветки)
   function repCell(r, child, waiting = null) {
     const n = (waiting || waitingMap()).get(r.id) || 0;
-    return `<button class="cell ${child ? 'child' : ''}" data-rep="${r.id}"><div class="avatar">${E(A.initials(r.full_name))}</div>
-      <div class="main"><div class="t"><b>${E(r.full_name)}</b></div><div class="s">${E((child ? [r.phone] : [r.company, r.phone]).filter(Boolean).join(' · ') || 'Торговый представитель')}</div></div>
+    return `<button class="cell ${child ? 'child' : ''}" data-rep="${r.id}">${A.av(r.full_name)}
+      <div class="main"><div class="t"><b>${E(r.full_name)}</b></div>${(() => { const sub = (child ? [r.phone] : [r.company, r.phone]).filter(Boolean).join(' · ');
+        return sub ? `<div class="s">${E(sub)}</div>` : ''; })()}</div>
       ${n ? `<div class="r"><span class="pill c-blue">ждём ${n}</span></div>` : ''}</button>`;
   }
 
@@ -814,11 +828,22 @@
   const shortNum = (n) => String(n || '').replace(/^\D+/, '').replace(/^0+(?=\d)/, '') || String(n || '');
   const DOC_LABEL = { in: 'Приход', pay: 'Оплата', ret: 'Возврат' };
   const docLabel = (d) => DOC_LABEL[d.kind] || d.title;
+  const daysSince = (at) => Math.max(0, Math.round((new Date(A.today() + 'T12:00:00') - new Date(String(at).slice(0, 10) + 'T12:00:00')) / 864e5));
+  // Выгрузка карточки поставщика в Excel: заказы, выплаты и документы 1С — каждое своим блоком
+  function repExcel(r, ords, pays, docs) {
+    const rows = [];
+    for (const o of ords) rows.push(['Заказ', o.order_date, o.order_no || '', Number(o.amount), ordView(o).label, o.expected_date || '', o.comment || '']);
+    for (const p of pays) rows.push(['Выплата', p.payout_date, p.invoice_no || '', Number(p.amount), A.payView(p.status).label, p.paid_at ? p.paid_at.slice(0, 10) : '', p.comment || p.basis || '']);
+    for (const d of docs || []) if (!d.deleted) rows.push([docLabel(d), d.at.slice(0, 10), d.in_no || shortNum(d.num), Number(d.inc) || -Number(d.dec),
+      d.kind === 'in' ? (Number(d.open) > 0 ? 'Не оплачено ' + A.fmtMoney(d.open) : 'Оплачено') : '', '', d.comment || '']);
+    if (!rows.length) return A.toast('Нечего выгружать', true);
+    A.toExcel(`${r.full_name} ${A.fmtDate(A.today())}`, ['Вид', 'Дата', '№', 'Сумма', 'Статус', 'Срок / оплачено', 'Комментарий'], rows, [12, 11, 14, 13, 22, 14, 30]);
+  }
   function mergeRows(list, rows) {
     const have = new Set(list.map((x) => x.id));
     for (const x of rows || []) if (!have.has(x.id)) list.push(x);
   }
-  function repDetail(id, tab = 'orders') {
+  function repDetail(id, tab = null) {
     const r = repById(id); if (!r) return;
     let ords, wait, pays, unpaid, docs = null, debt = null;
     const recount = () => {
@@ -828,42 +853,30 @@
       unpaid = pays.filter((p) => p.status !== 'paid');
     };
     recount();
+    // открыть вкладку, где есть данные: заказы → выплаты → документы 1С
+    if (!tab) tab = ords.length ? 'orders' : isAdmin() && pays.length ? 'payouts' : isAdmin() && r.ext_key ? 'docs' : 'orders';
     const phone1 = (r.phone || '').split(',')[0].trim();
     const tabs = () => [['orders', `Заказы · ${ords.length}`], ...(isAdmin() ? [['payouts', `Выплаты · ${pays.length}`], ['docs', '1С']] : []), ['history', 'История']];
     let acts = '';
     if (isAdmin()) {
-      acts += `<div class="section-h"><span>Личная ссылка</span></div><div class="list">
-          <button class="cell action" data-act="copy">Скопировать ссылку</button>
-          <button class="cell action" data-act="wa">Отправить в WhatsApp</button>
-          <button class="cell action" data-act="open">Открыть кабинет</button>
-          <button class="cell action" data-act="regen">Выдать новую ссылку</button></div>
-        <div class="section-h"><span>Вход по логину и паролю</span></div><div class="list">${(() => {
-          const ru = st.repUsers.find((u) => u.rep_id === id);
-          return ru ? `<div class="cell static"><div class="main">Логин</div><div class="value">${E(ru.login)}${ru.active ? '' : ' · отключён'}</div></div>
-            <button class="cell action" data-act="acc_pass">Сменить пароль</button>
-            <button class="cell ${ru.active ? 'danger' : 'action'}" data-act="acc_toggle">${ru.active ? 'Отключить вход' : 'Включить вход'}</button>
-            <button class="cell danger" data-act="acc_del">Удалить вход</button>`
-            : '<button class="cell action" data-act="acc_new">Создать логин и пароль</button>';
-        })()}</div>
-        <div class="footer-note">По желанию. Представитель видит только своё: заказы, записи, накладные, оплаты, возвраты, долг. Ссылка продолжает работать.</div>
-        <div class="section-h"><span>Управление</span></div><div class="list">
-          <button class="cell action" data-act="edit">Изменить данные</button>
-          <button class="cell ${r.active ? 'danger' : 'action'}" data-act="toggle">${r.active ? 'Отключить доступ' : 'Включить доступ'}</button>
-          <button class="cell danger" data-act="delete">Удалить</button></div>`;
+      const ru = st.repUsers.find((u) => u.rep_id === id);
+      acts = `<div class="list" style="margin-top:24px"><button class="cell more-row" data-act="access"><div class="main"><div class="t">Доступ и управление</div>
+        <div class="s">${E(['личная ссылка', ru ? 'логин ' + ru.login + (ru.active ? '' : ' (отключён)') : 'без логина', r.active ? '' : 'отключён'].filter(Boolean).join(' · '))}</div></div><span class="chev">›</span></button></div>`;
     }
     const statsHtml = () => `
-        <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--blue)"></span>Ожидается · ${wait.length}</div><div class="v">${A.fmtMoney(A.sum(wait))}</div></div>
+        <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--blue)"></span>Ожидается · ${wait.length}</div>${statV(A.sum(wait))}</div>
         ${isAdmin() ? (debt != null
-          ? `<div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--orange)"></span>Долг по 1С</div><div class="v">${A.fmtMoney(debt)}</div></div>`
-          : `<div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--orange)"></span>Не оплачено · ${unpaid.length}</div><div class="v">${A.fmtMoney(A.sum(unpaid))}</div></div>`)
+          ? `<div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--orange)"></span>Долг по 1С</div>${statV(debt)}</div>`
+          : `<div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--orange)"></span>Не оплачено · ${unpaid.length}</div>${statV(A.sum(unpaid))}</div>`)
           : `<div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--green)"></span>Пришло · ${ords.filter((o) => o.status === 'delivered').length}</div><div class="v">${A.fmtMoney(A.sum(ords.filter((o) => o.status === 'delivered')))}</div></div>`}`;
     const api = A.sheet({ title: '', left: 'Закрыть', body: `
-      <div class="hero"><div class="avatar" style="width:72px;height:72px;font-size:28px;margin:0 auto 8px">${E(A.initials(r.full_name))}</div>
-        <div style="font-size:22px;font-weight:700">${E(r.full_name)}</div><div class="who">${E(r.company || 'Торговый представитель')}${r.active ? '' : ' · отключён'}</div></div>
-      <div class="quick" style="justify-content:center;margin:14px 0 4px">
-        <button class="qbtn" data-act="order">${QI.order}<span>Заказ</span></button>
-        ${isAdmin() ? `<button class="qbtn" data-act="payout">${QI.pay}<span>Выплата</span></button>` : ''}
-        ${phone1 ? `<button class="qbtn" data-act="call">${QI.call}<span>Звонок</span></button>` : ''}
+      <div class="hero">${A.av(r.full_name, 'width:72px;height:72px;font-size:26px;margin:0 auto 10px;border-radius:24px')}
+        <div style="font-size:23px;font-weight:720;letter-spacing:-.02em">${E(r.full_name)}</div><div class="who">${E([r.company, phone1].filter(Boolean).join(' · ') || 'Торговый представитель')}${r.active ? '' : ' · отключён'}</div></div>
+      <div class="quick" style="--qn:${1 + isAdmin() + !!phone1 + isAdmin()};margin:16px 0 4px">
+        <button class="qbtn" data-act="order"><span class="qi">${QI.order}</span><span>Заказ</span></button>
+        ${isAdmin() ? `<button class="qbtn" data-act="payout"><span class="qi">${QI.pay}</span><span>Выплата</span></button>` : ''}
+        ${phone1 ? `<button class="qbtn" data-act="call"><span class="qi">${QI.call}</span><span>Звонок</span></button>` : ''}
+        ${isAdmin() ? `<button class="qbtn" data-act="xls"><span class="qi">${QI.xls}</span><span>В Excel</span></button>` : ''}
       </div>
       <div class="stats" id="rstats" style="margin-top:10px">${statsHtml()}</div>
       ${siblingsOf(r).length ? `<div class="section-h"><span>${E(r.company)} · ещё ${siblingsOf(r).length}</span></div>
@@ -882,7 +895,7 @@
     }
     function showTab(k) {
       cur = k; drawSeg();
-      if (k === 'history') { box.innerHTML = ''; loadHistory({ rep_id: id }, box); return; }
+      if (k === 'history') { box.innerHTML = A.skeleton(5, true); loadHistory({ rep_id: id }, box); return; }
       if (k === 'docs') { box.innerHTML = docsHtml(); bindDocs(); return; }
       const rows = k === 'orders' ? ords : pays;
       if (!rows.length) { box.innerHTML = A.emptyState(k === 'orders' ? 'Заказов нет' : 'Выплат нет'); return; }
@@ -897,11 +910,13 @@
     function docRow(d) {
       const link = st.payouts.find((p) => p.doc_id === d.id);
       const money = d.kind === 'in' || Number(d.inc) > 0 ? A.fmtMoney(d.inc) : '−' + A.fmtMoney(d.dec);
-      const sub = [A.fmtShort(d.at.slice(0, 10)),
-        d.deleted ? 'удалён в 1С' : d.kind === 'in' ? (Number(d.open) > 0 ? `не оплачено ${A.fmtMoney(d.open)}` : 'оплачено') : d.article].filter(Boolean).join(' · ');
-      const pill = d.kind === 'in' && !d.deleted && Number(d.open) > 0 ? A.pill(link ? A.payView(link.status) : { label: 'Нет записи', c: 'orange' }) : '';
-      return `<button class="cell doc ${d.deleted ? 'deleted' : ''} k-${d.kind}" data-doc="${d.id}"><div class="main">
-        <div class="t">${E(docTitle(d))}</div><div class="s">${E(sub)}</div></div>
+      const openIn = d.kind === 'in' && !d.deleted && Number(d.open) > 0, age = openIn ? daysSince(d.at) : 0;
+      const sub = E([A.fmtShort(d.at.slice(0, 10)),
+        d.deleted ? 'удалён в 1С' : d.kind === 'in' ? (openIn ? `не оплачено ${A.fmtMoney(d.open)}` : 'оплачено') : d.article].filter(Boolean).join(' · '))
+        + (openIn ? ` · <span class="${A.ageCls(age)}">${age} дн.</span>` : '');
+      const pill = openIn ? A.pill(link ? A.payView(link.status) : { label: 'Нет записи', c: 'orange' }) : '';
+      return `<button class="cell doc ${d.deleted ? 'deleted' : ''} k-${d.kind}" data-doc="${d.id}">${A.docIcon(d.kind)}<div class="main">
+        <div class="t">${E(docTitle(d))}</div><div class="s">${sub}</div></div>
         <div class="r"><div class="amt">${money}</div>${pill}</div></button>`;
     }
     // «Приход № 36», «Приход б/н», «Оплата накладной № 36», «Возврат»
@@ -911,7 +926,7 @@
       return `${docLabel(d)} ${A.docNo(d)}`.trim();
     }
     function docsHtml() {
-      if (!docs) return '<div class="spinner" style="margin:32px auto"></div>';
+      if (!docs) return A.skeleton(6);
       if (!docs.length) return A.emptyState('Документов 1С нет', 'Загрузите выгрузки 1С: ☰ → «Загрузить из 1С»');
       let html = window.Act ? '<button class="btn plain" type="button" data-act="act" style="margin:4px 0 0">Акт сверки · PDF</button>' : '';
       const open = docs.filter((d) => d.kind === 'in' && !d.deleted && Number(d.open) > 0).sort((a, b) => a.at.localeCompare(b.at));
@@ -959,11 +974,6 @@
       docs = data.docs || []; debt = data.debt != null && docs.length ? Number(data.debt) : null;
       recount(); api.body.querySelector('#rstats').innerHTML = statsHtml(); showTab(cur);
     });
-    const link = () => repLink(r);
-    const update = async (patch, msg) => {
-      const { data, error } = await sb.from('reps').update(patch).eq('id', id).select().single(); if (fail(error)) return;
-      Object.assign(r, data); A.toast(msg); api.close(); render();
-    };
     onActs(api, {
       order: () => orderForm(null, { rep_id: id }),
       payout: () => payoutForm(null, { rep_id: id }),
@@ -975,6 +985,39 @@
             return { ...d, basisNo: bs ? (bs.in_no ? '№ ' + bs.in_no : 'от ' + A.fmtDate(bs.at.slice(0, 10))) : '' }; }) });
       },
       call: () => (location.href = 'tel:' + phone1.replace(/[^\d+]/g, '')),
+      access: () => accessSheet(id),
+      xls: () => repExcel(r, ords, pays, docs),
+    });
+  }
+
+  // Доступ и управление представителем: ссылка, логин и пароль, данные, отключение
+  function accessSheet(id) {
+    const r = repById(id); if (!r) return;
+    const ru = st.repUsers.find((u) => u.rep_id === id), phone1 = (r.phone || '').split(',')[0].trim();
+    const api = A.sheet({ title: r.full_name, left: '\u2039 Карточка', body: `
+      <div class="section-h"><span>Личная ссылка</span></div><div class="list">
+        <button class="cell action" data-act="copy">Скопировать ссылку</button>
+        <button class="cell action" data-act="wa">Отправить в WhatsApp</button>
+        <button class="cell action" data-act="open">Открыть кабинет</button>
+        <button class="cell action" data-act="regen">Выдать новую ссылку</button></div>
+      <div class="section-h"><span>Вход по логину и паролю</span></div><div class="list">${ru
+        ? `<div class="cell static"><div class="main">Логин</div><div class="value">${E(ru.login)}${ru.active ? '' : ' · отключён'}</div></div>
+          <button class="cell action" data-act="acc_pass">Сменить пароль</button>
+          <button class="cell ${ru.active ? 'danger' : 'action'}" data-act="acc_toggle">${ru.active ? 'Отключить вход' : 'Включить вход'}</button>
+          <button class="cell danger" data-act="acc_del">Удалить вход</button>`
+        : '<button class="cell action" data-act="acc_new">Создать логин и пароль</button>'}</div>
+      <div class="footer-note">По желанию. Представитель видит только своё: заказы, записи, накладные, оплаты, возвраты, долг. Ссылка продолжает работать.</div>
+      <div class="section-h"><span>Управление</span></div><div class="list">
+        <button class="cell action" data-act="edit">Изменить данные</button>
+        <button class="cell ${r.active ? 'danger' : 'action'}" data-act="toggle">${r.active ? 'Отключить доступ' : 'Включить доступ'}</button>
+        <button class="cell danger" data-act="delete">Удалить</button></div>` });
+    api.el.querySelector('[data-x=left]').addEventListener('click', () => setTimeout(() => repDetail(id), 330));
+    const link = () => repLink(r);
+    const update = async (patch, msg) => {
+      const { data, error } = await sb.from('reps').update(patch).eq('id', id).select().single(); if (fail(error)) return;
+      Object.assign(r, data); A.toast(msg); api.close(); render();
+    };
+    onActs(api, {
       copy: async () => { try { await navigator.clipboard.writeText(link()); A.toast('Ссылка скопирована'); } catch { window.prompt('Скопируйте ссылку', link()); } },
       wa: () => {
         const phone = phone1.replace(/\D/g, '').replace(/^8(?=\d{10}$)/, '7');
@@ -989,20 +1032,20 @@
         A.toast('Новая ссылка готова — отправьте её');
       },
       edit: () => repForm(r),
-      acc_new: () => repAccountForm(r, () => { api.close(); setTimeout(() => repDetail(id), 300); }),
+      acc_new: () => repAccountForm(r, () => setTimeout(() => accessSheet(id), 300)),
       acc_pass: () => repAccountForm(r, null, st.repUsers.find((u) => u.rep_id === id)),
       acc_toggle: async () => {
         const ru = st.repUsers.find((u) => u.rep_id === id); if (!ru) return;
         if (ru.active && !(await confirmAct(`Отключить вход «${ru.login}»? Ссылка продолжит работать.`))) return;
         try { const d = await staffCall({ action: 'rep_update', rep_id: id, active: !ru.active }); Object.assign(ru, d.rep_user);
-          A.toast(ru.active ? 'Вход включён' : 'Вход отключён'); api.close(); setTimeout(() => repDetail(id), 300); }
+          A.toast(ru.active ? 'Вход включён' : 'Вход отключён'); setTimeout(() => accessSheet(id), 50); }
         catch (e) { A.toast(e.message, true); }
       },
       acc_del: async () => {
         const ru = st.repUsers.find((u) => u.rep_id === id); if (!ru) return;
         if (!(await confirmAct(`Удалить вход «${ru.login}»? Заказы и выплаты останутся, ссылка продолжит работать.`))) return;
         try { await staffCall({ action: 'rep_delete', rep_id: id }); st.repUsers = st.repUsers.filter((u) => u.rep_id !== id);
-          A.toast('Вход удалён'); api.close(); setTimeout(() => repDetail(id), 300); }
+          A.toast('Вход удалён'); setTimeout(() => accessSheet(id), 50); }
         catch (e) { A.toast(e.message, true); }
       },
       toggle: () => update({ active: !r.active }, r.active ? 'Доступ отключён' : 'Доступ включён'),
@@ -1076,7 +1119,7 @@
     let html = '';
     if (isAdmin()) {
       html += `<div class="section-h"><span>Сотрудники</span></div><div class="list">` + st.staff.map((s) =>
-        `<button class="cell" data-staff="${s.user_id}"><div class="avatar">${E(A.initials(s.full_name))}</div><div class="main"><div class="t">${E(s.full_name)}${s.user_id === st.me.user_id ? ' <span class="value">· вы</span>' : ''}</div>
+        `<button class="cell" data-staff="${s.user_id}">${A.av(s.full_name)}<div class="main"><div class="t">${E(s.full_name)}${s.user_id === st.me.user_id ? ' <span class="value">· вы</span>' : ''}</div>
           <div class="s">${E(s.login)} · ${roleName(s)}${s.active ? '' : ' · отключён'}</div></div></button>`).join('')
         + `<button class="cell action" data-act-add>＋ Добавить сотрудника</button></div>
         <div class="section-h"><span>${st.stores.length > 1 ? 'Магазины' : 'Магазин'}</span></div><div class="list">`
@@ -1100,7 +1143,7 @@
           <div class="value" style="color:var(--${st.dbMb >= 400 ? 'red' : 'label2'})">${st.dbMb} МБ из 500</div></div></div>
           ${st.dbMb >= 400 ? '<div class="footer-note warn">База почти заполнена — сообщите, чтобы перенести старые документы в архив.</div>' : ''}` : ''}`;
     } else {
-      html += `<div class="list" style="margin-top:12px"><div class="cell static"><div class="avatar">${E(A.initials(st.me.full_name))}</div>
+      html += `<div class="list" style="margin-top:12px"><div class="cell static">${A.av(st.me.full_name)}
         <div class="main"><div class="t"><b>${E(st.me.full_name)}</b></div><div class="s">${E(st.me.login)} · ${roleName(st.me)}</div></div></div></div>`;
     }
     if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone) {
@@ -1111,6 +1154,8 @@
       <div class="footer-note">Включите и выключите VPN и проверьте оба раза: видно, доходят ли данные без VPN.</div>`;
     html += `<div class="section-h"><span>Оформление</span></div><div class="segmented" id="theme">${[['light', 'Светлое'], ['dark', 'Тёмное'], ['auto', 'Как в системе']]
       .map(([k, l]) => `<button data-k="${k}" class="${A.getTheme() === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="section-h"><span>Размер текста</span></div><div class="segmented" id="fz">${[['n', 'Обычный'], ['l', 'Крупный'], ['xl', 'Очень крупный']]
+      .map(([k, l]) => `<button data-k="${k}" class="${A.getFz() === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div class="list" style="margin-top:24px"><button class="cell danger" id="logout">Выйти</button></div>`;
     setBody(html);
     $('body').querySelectorAll('[data-store]').forEach((c) => c.addEventListener('click', () => storeForm(storeById(c.dataset.store))));
@@ -1124,6 +1169,7 @@
     $('body').querySelector('[data-act-add]')?.addEventListener('click', () => staffForm());
     $('netcheck').addEventListener('click', netCheck);
     $('theme').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) { A.haptic(); A.setTheme(k); renderMore(); } });
+    $('fz').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) { A.haptic(); A.setFz(k); renderMore(); } });
     $('logout').addEventListener('click', async () => {
       if (queue.length && !(await confirmAct(`Не отправлено изменений: ${queue.length}. При выходе они пропадут. Выйти?`))) return;
       queue = []; saveQueue(); try { localStorage.removeItem(CKEY); } catch { /* */ }
@@ -1317,6 +1363,109 @@
   });
   A.pullToRefresh(() => refresh(true, true));
 
+
+  // =====================================================================
+  // СВОДКА (админ): долг по 1С, его возраст, выплаты недели, приход и оплаты по месяцам, кто дольше ждёт
+  // =====================================================================
+  const AGE = [['a', 'до 30 дней', 'var(--age1)'], ['b', '31–60 дней', 'var(--age2)'], ['c', '61–90 дней', 'var(--age3)'], ['d', 'больше 90', 'var(--age4)']];
+  const MON = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  const shortMoney = (v) => { const n = Math.abs(Number(v) || 0);
+    return n >= 1e6 ? (n / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' млн' : n >= 1e3 ? Math.round(n / 1e3).toLocaleString('ru-RU') + ' тыс' : String(Math.round(n)); };
+  function renderSummary() {
+    frame('Сводка', null, 'sum', null);
+    render.body = renderSummary;
+    const t = A.today();
+    // выплаты на 7 дней вперёд — из уже загруженных записей
+    const days7 = Array.from({ length: 7 }, (_, i) => A.addDays(t, i));
+    const open = st.payouts.filter((p) => p.status !== 'paid');
+    const late = open.filter((p) => p.payout_date < t);
+    const wk = days7.map((d) => ({ d, rows: open.filter((p) => p.payout_date === d) }));
+    const wd = (d) => new Date(d + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'short' });
+    setBody(`<div class="subtitle">Долг по накладным 1С и записи на выплату</div>
+      <div id="s-debt">${A.skeleton(3)}</div>
+      <div class="section-h"><span>Выплаты на неделю</span><span>${A.moneyOrDash(A.sum(wk.flatMap((x) => x.rows)))}</span></div>
+      <div class="wk">${wk.map((x) => `<button type="button" class="${x.d === t ? 'today' : ''} ${x.rows.length ? 'has' : ''}" data-day="${x.d}">
+        <div class="d">${E(wd(x.d))}</div><div class="n">${Number(x.d.slice(8))}</div><div class="s">${x.rows.length ? shortMoney(A.sum(x.rows)) : '—'}</div></button>`).join('')}</div>
+      ${late.length ? `<div class="list" style="margin-top:10px"><button class="cell" data-late><div class="main"><div class="t"><b>Просрочено</b></div>
+        <div class="s">${late.length} зап. · самая старая на ${A.fmtShort(late.reduce((m, p) => (p.payout_date < m ? p.payout_date : m), t))}</div></div>
+        <div class="r"><div class="amt" style="color:var(--red)">${A.fmtMoney(A.sum(late))}</div></div><span class="chev">›</span></button></div>` : ''}
+      <div id="s-rest"></div>`);
+    $('body').querySelectorAll('[data-day]').forEach((b) => b.addEventListener('click', () => {
+      const d = b.dataset.day; A.haptic(); st.tab = 'today'; st.seg.today = 'cal'; st.cal = { ym: d.slice(0, 7), day: d }; render();
+    }));
+    $('body').querySelector('[data-late]')?.addEventListener('click', () => { st.seg.payouts = 'to_pay'; openTab('payouts'); });
+    if (!navigator.onLine) { $('s-debt').innerHTML = A.emptyState('Нет сети', 'Сводка по 1С считается на сервере'); return; }
+    sb.rpc('summary_stats').then(({ data, error }) => {
+      if (st.tab !== 'sum' || !$('s-debt')) return;
+      if (error) { $('s-debt').innerHTML = A.emptyState('Не удалось загрузить', humanError(error)); return; }
+      drawSummary(data);
+    });
+  }
+  function drawSummary(d) {
+    const ag = d.aging || {}, total = Number(d.open?.sum || 0);
+    const bar = AGE.map(([k, , c]) => { const v = Number(ag[k]?.sum || 0); return v > 0 ? `<span style="flex:${v};background:${c}" title="${A.fmtMoney(v)}"></span>` : ''; }).join('');
+    $('s-debt').innerHTML = `<div class="kpi">
+        <div class="lbl">Не оплачено по накладным</div>
+        <div class="big">${A.fmtMoney(total)}</div>
+        ${total ? `<div class="agebar" role="img" aria-label="Возраст долга">${bar}</div>
+        <div class="age-legend">${AGE.map(([k, l, c]) => `<button type="button"><i style="background:${c}"></i><span><span class="t">${l}</span>
+          <b>${A.fmtMoney(ag[k]?.sum || 0)}</b></span></button>`).join('')}</div>` : ''}
+        <div class="footer-note" style="margin:12px 0 0">${Number(d.open?.n || 0).toLocaleString('ru-RU')} накл. без расходника${d.debt != null ? ` · по взаиморасчётам ${A.fmtMoney(d.debt)}` : ''}</div>
+      </div>`;
+    // приход и оплаты по месяцам — сгруппированные столбцы, нажатие на месяц показывает цифры
+    const months = (d.months || []).slice(-12);
+    let html = '';
+    if (months.length) {
+      const W = 340, H = 168, top = 8, base = 140, left = 34;
+      const max = Math.max(1, ...months.flatMap((m) => [Number(m.in), Number(m.pay)]));
+      const nice = (() => { const p = 10 ** Math.floor(Math.log10(max)); const f = max / p; return ([1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((x) => x >= f) || 10) * p; })();
+      const y = (v) => base - (Number(v) / nice) * (base - top);
+      const slot = (W - left) / months.length, bw = Math.max(4, Math.min(12, (slot - 8) / 2));
+      const rbar = (x, v, cls) => { const yy = y(v), h = base - yy; if (h < 0.5) return '';
+        const r = Math.min(3, h, bw / 2); return `<path class="${cls}" d="M${x},${base}V${yy + r}Q${x},${yy} ${x + r},${yy}H${x + bw - r}Q${x + bw},${yy} ${x + bw},${yy + r}V${base}Z"/>`; };
+      const grid = [0, 0.5, 1].map((f) => `<line x1="${left}" x2="${W}" y1="${y(nice * f)}" y2="${y(nice * f)}"/><text class="ax" x="${left - 6}" y="${y(nice * f) + 4}" text-anchor="end">${f ? shortMoney(nice * f) : '0'}</text>`).join('');
+      const marks = months.map((m, i) => { const cx = left + slot * i + slot / 2, mo = Number(m.m.slice(5)) - 1;
+        return `<rect class="hit" data-m="${i}" x="${left + slot * i}" y="${top}" width="${slot}" height="${H - top}" rx="6"/>
+          ${rbar(cx - bw - 1, m.in, 'bar-in')}${rbar(cx + 1, m.pay, 'bar-pay')}
+          <text class="ax" x="${cx}" y="${base + 16}" text-anchor="middle">${MON[mo]}</text>`; }).join('');
+      html += `<div class="section-h"><span>Приход и оплаты по месяцам</span></div>
+        <div class="chart"><div class="legend"><span><i style="background:var(--c-in)"></i>Пришло</span><span><i style="background:var(--c-pay)"></i>Оплачено</span></div>
+          <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Приход и оплаты по месяцам"><g class="grid">${grid}</g>${marks}</svg>
+          <div class="tip" id="s-tip"></div></div>`;
+      $('s-rest').innerHTML = html;
+      const tip = (i) => {
+        const m = months[i], mo = Number(m.m.slice(5)) - 1, diff = Number(m.in) - Number(m.pay) - Number(m.ret);
+        $('s-rest').querySelectorAll('.hit').forEach((h) => h.classList.toggle('on', Number(h.dataset.m) === i));
+        $('s-tip').innerHTML = `<div class="m">${MON[mo][0].toUpperCase() + MON[mo].slice(1)} ${m.m.slice(0, 4)}</div>
+          <span>Пришло</span><em>${A.fmtMoney(m.in)}</em><span>Оплачено</span><em>${A.fmtMoney(m.pay)}</em>
+          <span>Возвраты</span><em>${A.fmtMoney(m.ret)}</em><span>${diff >= 0 ? 'Долг вырос на' : 'Долг уменьшился на'}</span><em>${A.fmtMoney(Math.abs(diff))}</em>`;
+      };
+      $('s-rest').querySelector('svg').addEventListener('click', (e) => { const h = e.target.closest('.hit'); if (h) { A.haptic(); tip(Number(h.dataset.m)); } });
+      $('s-rest').querySelector('svg').addEventListener('mousemove', (e) => { const h = e.target.closest('.hit'); if (h && !h.classList.contains('on')) tip(Number(h.dataset.m)); });
+      tip(months.length - 1);
+    }
+    // кто дольше и больше всех ждёт оплаты
+    const topRows = (d.top || []).map((x) => ({ ...x, r: repById(x.rep_id) }));
+    if (topRows.length) {
+      const mx = Math.max(...topRows.map((x) => Number(x.sum)));
+      $('s-rest').insertAdjacentHTML('beforeend', `<div class="section-h"><span>Больше всего ждут оплаты</span><span>топ ${topRows.length}</span></div>
+        <div class="list">${topRows.map((x) => { const dd = daysSince(x.since);
+          return `<button class="cell" data-rep="${x.rep_id}">${A.av(x.r?.full_name || '?')}<div class="main"><div class="t"><b>${E(x.r?.full_name || '—')}</b></div>
+            <div class="s">${x.n} накл. · <span class="${A.ageCls(dd)}">ждёт ${dd} дн.</span></div>
+            <div class="meter"><i style="width:${Math.max(3, Math.round((Number(x.sum) / mx) * 100))}%"></i></div></div>
+            <div class="r"><div class="amt">${A.fmtMoney(x.sum)}</div></div></button>`; }).join('')}</div>`);
+      $('s-rest').querySelectorAll('[data-rep]').forEach((c) => c.addEventListener('click', () => repDetail(c.dataset.rep, 'docs')));
+    }
+    $('s-rest').insertAdjacentHTML('beforeend', `<div class="list" style="margin-top:22px"><button class="cell action" data-sxls>Выгрузить сводку в Excel</button>
+      <button class="cell action" data-sdebt>Все неоплаченные накладные</button></div>`);
+    $('s-rest').querySelector('[data-sdebt]').addEventListener('click', () => debtSheet('all'));
+    $('s-rest').querySelector('[data-sxls]').addEventListener('click', () => {
+      const rows = [['Не оплачено по накладным', '', Number(total)], ...AGE.map(([k, l]) => ['  ' + l, Number(ag[k]?.n || 0), Number(ag[k]?.sum || 0)]), [], ['Месяц', 'Пришло', 'Оплачено', 'Возвраты'],
+        ...months.map((m) => [m.m, Number(m.in), Number(m.pay), Number(m.ret)]), [], ['Больше всего ждут', 'Накладных', 'Сумма', 'С даты'],
+        ...topRows.map((x) => [x.r?.full_name || '', Number(x.n), Number(x.sum), x.since])];
+      A.toExcel(`Сводка ${A.fmtDate(A.today())}`, ['Показатель', 'Кол-во', 'Сумма', ''], rows, [30, 14, 16, 12]);
+    });
+  }
   // =====================================================================
   // СЕГОДНЯ и КАЛЕНДАРЬ
   // =====================================================================
@@ -1325,6 +1474,9 @@
     pay: SVG('M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Zm1 2v8h16V8H4Zm8 1.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z'),
     call: SVG('M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.46.57 3.6a1 1 0 0 1-.25 1l-2.2 2.2Z'),
     cal: SVG('M7 2h2v2h6V2h2v2h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2V2ZM5 9v10h14V9H5Z'),
+    doc: SVG('M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm7 1.5V9h5.5L13 3.5ZM8 13h8v2H8v-2Zm0 4h8v2H8v-2Z'),
+    upload: SVG('M11 16V7.8l-3.6 3.6L6 10l6-6 6 6-1.4 1.4L13 7.8V16h-2Zm-7 2h16v2H4v-2Z'),
+    xls: SVG('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm0 2v4h6V5H5Zm8 0v4h6V5h-6Zm-8 6v8h6v-8H5Zm8 0v8h6v-8h-6Z'),
   };
   const lateOrders = () => st.orders.filter((o) => o.status === 'ordered' && o.expected_date && o.expected_date < A.today());
   const ordersOn = (d) => st.orders.filter((o) => o.status === 'ordered' && o.expected_date === d);
@@ -1334,7 +1486,7 @@
   const weekday = (d) => { const x = new Date(d + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' }); return x[0].toUpperCase() + x.slice(1); };
 
   function renderToday() {
-    frame('Сегодня', [['today', 'Список'], ['cal', 'Календарь']], 'today', isAdmin() ? 'Поставщик, № накладной, сумма' : 'Поставщик, № заказа, сумма');
+    frame('Сегодня', [['today', 'Список'], ['cal', 'Календарь']], 'today', isAdmin() ? 'Имя, № накладной, сумма' : 'Имя, № заказа, сумма');
     render.body = () => ((st.q.today || '').trim() ? renderTodaySearch() : st.seg.today === 'cal' ? renderCalendar() : renderTodayBody());
     render.body();
   }
@@ -1358,49 +1510,69 @@
     if (isAdmin()) findInvoices(q, local);
   }
   function quickActions() {
-    return `<div class="quick"><button class="qbtn" data-q="order">${QI.order}<span>Заказ</span></button>
-      ${isAdmin() ? `<button class="qbtn" data-q="payout">${QI.pay}<span>Выплата</span></button>` : ''}</div>`;
+    const b = (k, ic, l) => `<button class="qbtn" data-q="${k}"><span class="qi">${QI[ic]}</span><span>${l}</span></button>`;
+    const list = isAdmin() ? [b('order', 'order', 'Заказ'), b('payout', 'pay', 'Выплата'), b('debt', 'doc', 'Долг 1С'), b('import', 'upload', 'Загрузить')]
+      : [b('order', 'order', 'Заказ'), b('cal', 'cal', 'Календарь')];
+    return `<div class="quick" style="--qn:${list.length}">${list.join('')}</div>`;
   }
   function bindQuick(root) {
     root.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', () => {
       const q = b.dataset.q;
-      if (q === 'order') orderForm(); else payoutForm();
+      if (q === 'order') orderForm(); else if (q === 'payout') payoutForm(); else if (q === 'debt') debtSheet('all');
+      else if (q === 'import') import1C(); else if (q === 'cal') { st.seg.today = 'cal'; render(); }
     }));
+  }
+  // «Чек дня»: главное за день одной полосой, как кассовая лента; строка ведёт к своему разделу
+  function daySlip({ today, dueToday, tomO, tomP, late, dueLate }) {
+    const row = (k, label, v, n, cls = '') => `<button type="button" class="slip-row ${cls} ${v ? '' : 'zero'}" data-go="${k}">
+      <span class="k">${E(label)}</span><span class="lead"></span>${n ? `<span class="n">${E(n)}</span>` : ''}<span class="v">${v ? A.fmtMoney(v) : '—'}</span></button>`;
+    const cnt = (a, one, few, many) => { const n = a.length; if (!n) return ''; const m10 = n % 10, m100 = n % 100;
+      return `${n} ${m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many}`; };
+    const zak = (a) => cnt(a, 'заказ', 'заказа', 'заказов'), zap = (a) => cnt(a, 'запись', 'записи', 'записей');
+    let rows = row('s-in', 'Придут сегодня', A.sum(today), zak(today));
+    if (isAdmin()) rows += row('s-pay', 'Выплатить сегодня', A.sum(dueToday), zap(dueToday));
+    rows += row('s-tom', 'Завтра', A.sum(tomO) + (isAdmin() ? A.sum(tomP) : 0), [zak(tomO), isAdmin() ? zap(tomP) : ''].filter(Boolean).join(', '));
+    const lateSum = A.sum(late) + A.sum(dueLate);
+    rows += row('s-late', 'Просрочено', lateSum, [zak(late), zap(dueLate)].filter(Boolean).join(', '), lateSum ? 'red' : '');
+    const o = isAdmin() ? st.open1c || st.unrec : null;
+    if (o?.n) rows += `<div class="slip-total">${row('debt', 'Долг по 1С', o.sum, `${Number(o.n).toLocaleString('ru-RU')} накл.`)}</div>`;
+    return `<div class="slip"><div class="slip-head"><b>${E(weekday(A.today()))}</b><span>${E(st.me.full_name || '')}</span></div>${rows}</div>`;
   }
   function renderTodayBody() {
     const t = A.today(), t1 = A.addDays(t, 1);
     const late = lateOrders(), today = ordersOn(t), due = duePayouts().sort((a, b) => a.payout_date.localeCompare(b.payout_date));
     const tomO = ordersOn(t1), tomP = payoutsOn(t1).filter((p) => p.status !== 'paid');
-    const sec = (title, items, cells, cls = '') => (items.length ? `<div class="section-h ${cls}"><span>${E(title)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">${cells}</div>` : '');
-    let html = `<div class="subtitle">${E(weekday(t))}</div>${quickActions()}`;
-    if (isAdmin() && (st.open1c?.n || st.unrec?.n)) {
-      const o = st.open1c || st.unrec;
-      html += `<div class="list"><button class="cell" id="debt1c"><div class="main"><div class="t"><b>Не оплачено в 1С</b></div>
-        <div class="s">${o.n} накл. без расходника${st.unrec?.n ? ` · без записи ${st.unrec.n}` : ''}</div></div>
-        <div class="r"><div class="amt">${A.fmtMoney(o.sum)}</div>${A.pill({ label: String(o.n), c: 'orange' })}</div></button></div>`;
-    }
+    const sec = (title, items, cells, cls = '', id = '') => (items.length ? `<div class="section-h ${cls}" ${id ? `id="${id}"` : ''}><span>${E(title)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">${cells}</div>` : '');
     // сначала сегодня, потом завтра, просроченное — в конце
     const dueToday = due.filter((p) => p.payout_date === t), dueLate = due.filter((p) => p.payout_date < t);
-    const oc = orderCell, pcell = (x, c) => payoutCell(x, [c ? '' : repById(x.rep_id)?.company, x.payout_date < t ? 'было на ' + A.fmtShort(x.payout_date) : '', payNote(x)].filter(Boolean).join(' · ') || 'выплата', '', c);
-    html += sec(`Придут сегодня · ${today.length}`, today, treeList(today, oc), 'today');
-    html += sec(`Выплатить сегодня · ${dueToday.length}`, dueToday, treeList(dueToday, pcell), 'today');
+    let html = daySlip({ today, dueToday, tomO, tomP, late, dueLate }) + quickActions();
+    const oc = orderCell, pcell = (x, c) => payoutCell(x, [x.payout_date < t ? 'было на ' + A.fmtShort(x.payout_date) : '', payNote(x), c ? '' : repById(x.rep_id)?.company].filter(Boolean).join(' · ') || 'выплата', '', c);
+    html += sec(`Придут сегодня · ${today.length}`, today, treeList(today, oc), 'today', 's-in');
+    html += sec(`Выплатить сегодня · ${dueToday.length}`, dueToday, treeList(dueToday, pcell), 'today', 's-pay');
     if (!today.length && !dueToday.length && !late.length && !dueLate.length) {
       html += `<div class="empty"><div class="done-mark">✓</div><div class="big">На сегодня всё</div>Просроченных заказов${isAdmin() ? ' и выплат' : ''} нет</div>`;
     }
-    html += sec(`Завтра придут · ${tomO.length}`, tomO, treeList(tomO, oc));
-    html += sec(`Завтра выплатить · ${tomP.length}`, tomP, treeList(tomP, pcell));
-    if (late.length || dueLate.length) html += '<div class="past-sep"><span>Просрочено</span></div>';
+    html += sec(`Завтра придут · ${tomO.length}`, tomO, treeList(tomO, oc), '', 's-tom');
+    html += sec(`Завтра выплатить · ${tomP.length}`, tomP, treeList(tomP, pcell), '', tomO.length ? '' : 's-tom');
+    if (late.length || dueLate.length) html += '<div class="past-sep red" id="s-late"><span>Просрочено</span></div>';
     html += sec(`Заказы не пришли · ${late.length}`, late, treeList(late, oc), 'red');
     html += sec(`Выплаты не сделаны · ${dueLate.length}`, dueLate, treeList(dueLate, pcell), 'red');
     setBody(html); bindCells($('body')); bindQuick($('body'));
-    $('debt1c')?.addEventListener('click', () => debtSheet('all'));
+    $('body').querySelector('.slip')?.addEventListener('click', (e) => {
+      const k = e.target.closest('[data-go]')?.dataset.go; if (!k) return;
+      A.haptic();
+      if (k === 'debt') return debtSheet('all');
+      const el = $(k);
+      if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 60, behavior: 'smooth' });
+      else if (k === 's-tom') { st.seg.today = 'cal'; const d1 = A.addDays(A.today(), 1); st.cal = { ym: d1.slice(0, 7), day: d1 }; render(); }
+    });
   }
 
   // Неоплаченные в 1С накладные без записи на выплату — по поставщикам
   // Долг по накладным: всё, что в 1С не закрыто расходником. Фильтр «без записи», вид «по поставщикам» / «по накладным».
   const unrecSheet = () => debtSheet('norec');
   async function debtSheet(start = 'all') {
-    const api = A.sheet({ title: 'Не оплачено в 1С', left: 'Закрыть', body: '<div class="spinner" style="margin:40px auto"></div>' });
+    const api = A.sheet({ title: 'Не оплачено в 1С', left: 'Закрыть', body: '<div style="margin-top:12px">' + A.skeleton(8) + '</div>' });
     const { data, error } = await sb.rpc('open_invoices');
     if (!api.el.isConnected) return;
     if (error) { api.body.innerHTML = A.emptyState('Не удалось загрузить', humanError(error)); return; }
@@ -1417,7 +1589,7 @@
         .map(([k, l]) => `<button data-v="${k}" class="${view === k ? 'on' : ''}">${l}</button>`).join('');
       api.body.querySelector('#dsum').innerHTML = `<div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--orange)"></span>Накладных · ${rows.length}</div>
           <div class="v">${A.fmtMoney(money(rows))}</div></div>
-        <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--red)"></span>Висят дольше 30 дней</div>
+        <div class="stat" style="cursor:default"><div class="k"><span class="dot" style="background:var(--red)"></span>Дольше 30 дней</div>
           <div class="v">${A.fmtMoney(money(rows.filter((d) => days(d) > 30)))}</div></div>`;
       let html = '';
       if (view === 'reps') {
@@ -1428,8 +1600,8 @@
         const supRow = (g, child) => {
           const r = repById(g.rid), dd = days(g.first);
           return `<button class="cell ${child ? 'child' : ''}" data-rep="${g.rid}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
-            <div class="s">${E([child ? '' : r?.company, `${g.items.length} накл.`, `висит с ${A.fmtShort(g.first.at.slice(0, 10))} (${dd} дн.)`].filter(Boolean).join(' · '))}</div></div>
-            <div class="r"><div class="amt">${A.fmtMoney(g.sum)}</div>${dd > 30 ? A.pill({ label: dd + ' дн.', c: 'red' }) : ''}</div></button>`;
+            <div class="s">${E([`${g.items.length} накл.`, `с ${A.fmtShort(g.first.at.slice(0, 10))}`].join(' · '))} · <span class="${A.ageCls(dd)}">${dd} дн.</span>${child || !r?.company ? '' : ' · ' + E(r.company)}</div></div>
+            <div class="r"><div class="amt">${A.fmtMoney(g.sum)}</div></div></button>`;
         };
         const items = list.slice(0, limit).map((g) => ({ rep_id: g.rid, amount: g.sum, g }));
         html = list.length ? `<div class="list">${q ? items.map((x) => supRow(x.g, false)).join('') : treeList(items, (x, c) => supRow(x.g, c), true)}</div>` : A.emptyState('Ничего не найдено');
@@ -1439,7 +1611,7 @@
         html = list.length ? `<div class="list">${list.slice(0, limit).map((d) => {
           const r = repById(d.rep_id), dd = days(d);
           return `<button class="cell" data-rep="${d.rep_id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
-            <div class="s">${E([A.docNo({ ...d, kind: 'in' }), A.fmtShort(d.at.slice(0, 10)), dd + ' дн.'].join(' · '))}</div></div>
+            <div class="s">${E([A.docNo({ ...d, kind: 'in' }), A.fmtShort(d.at.slice(0, 10))].join(' · '))} · <span class="${A.ageCls(dd)}">${dd} дн.</span></div></div>
             <div class="r"><div class="amt">${A.fmtMoney(d.open)}</div>${A.pill(d.rec ? A.payView(d.rec) : { label: 'Нет записи', c: 'orange' })}</div></button>`;
         }).join('')}</div>` : A.emptyState('Ничего не найдено');
         if (list.length > limit) html += '<button class="btn plain" type="button" data-more>Показать ещё</button>';
@@ -1449,13 +1621,20 @@
     api.body.innerHTML = `<div class="footer-note" style="margin:8px 4px 10px">Приходные накладные, на которые в 1С нет расходника (оплаты).
         Оплаты с «Документом основанием» закрывают свою накладную, остальные — самые старые.</div>
       <div class="segmented" id="dseg"></div><div class="stats" id="dsum"></div><div class="segmented" id="dview"></div>
-      ${A.searchBox('dq', 'Поставщик, № накладной, сумма')}<div id="dl"></div>`;
+      ${A.searchBox('dq', 'Поставщик, № накладной, сумма')}<div id="dl"></div>
+      <button class="btn plain" type="button" data-xls>Выгрузить в Excel</button>`;
     draw();
     A.bindSearch(api.body.querySelector('#dq'), () => { q = api.body.querySelector('#dq').value; limit = 150; draw(); });
     api.body.addEventListener('click', (e) => {
       const f = e.target.closest('[data-f]'); if (f) { flt = f.dataset.f; limit = 150; A.haptic(); draw(); return; }
       const v = e.target.closest('[data-v]'); if (v) { view = v.dataset.v; limit = 150; A.haptic(); draw(); return; }
       if (e.target.closest('[data-more]')) { limit += 300; draw(); return; }
+      if (e.target.closest('[data-xls]')) {
+        const rows = data.filter((d) => flt === 'all' || !d.rec);
+        return A.toExcel(`Долг по 1С ${A.fmtDate(t)}`, ['Поставщик', 'ИП / компания', '№ накладной', 'Дата', 'Дней', 'Не оплачено', 'Запись'],
+          rows.map((d) => { const r = repById(d.rep_id); return [r?.full_name || '', r?.company || '', d.in_no || '', d.at.slice(0, 10), days(d), Number(d.open), d.rec ? A.payView(d.rec).label : 'Нет']; }),
+          [28, 24, 14, 11, 7, 13, 10]);
+      }
       const c = e.target.closest('[data-rep]'); if (c) repDetail(c.dataset.rep, 'docs');
     });
   }
@@ -1577,11 +1756,11 @@
   function historySheet() {
     const api = A.sheet({ title: 'История изменений', left: 'Закрыть', body: `
       <div class="segmented" id="hseg" style="margin-top:8px"><button data-k="all" class="on">Все</button><button data-k="orders">Заказы</button><button data-k="payouts">Выплаты</button><button data-k="reps">Справочник</button><button data-k="docs">1С</button></div>
-      <div id="hbox"><div class="spinner" style="margin:40px auto"></div></div>` });
+      <div id="hbox">${A.skeleton(8, true)}</div>` });
     const box = api.body.querySelector('#hbox');
     const show = (k) => {
       api.body.querySelectorAll('#hseg button').forEach((b) => b.classList.toggle('on', b.dataset.k === k));
-      box.innerHTML = '<div class="spinner" style="margin:40px auto"></div>';
+      box.innerHTML = A.skeleton(8, true);
       loadHistory(k === 'all' ? {} : { entity: k === 'reps' ? ['reps', 'stores', 'import'] : k }, box, 300);
     };
     api.body.querySelector('#hseg').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) show(k); });
@@ -1619,14 +1798,7 @@
   }
 
   // ---------- загрузка справочника представителей из 1С ----------
-  function loadXLSX() {
-    if (window.XLSX) return Promise.resolve();
-    return new Promise((ok, bad) => {
-      const el = document.createElement('script'); el.src = 'vendor/xlsx.core.min.js';
-      el.onload = ok; el.onerror = () => bad(new Error('Не удалось загрузить модуль чтения Excel'));
-      document.head.append(el);
-    });
-  }
+  const loadXLSX = () => A.loadXLSX();
   // Загрузка выгрузок 1С: справочник контрагентов + документы (несколько файлов за раз)
   const FILE_KIND = { kontr: 'Контрагенты', vzaimo: 'Взаиморасчёты с контрагентами' };
   function import1C() {
@@ -1843,7 +2015,7 @@
     const load = async () => {
       const my = ++seq, from = v('from'), to = v('to');
       if (!from || !to || to < from) { stats = {}; return draw(); }
-      f.querySelector('#pk').innerHTML = '<div class="cell static"><div class="spinner" style="margin:0 auto"></div></div>';
+      f.querySelector('#pk').innerHTML = '<div class="skel-row"><div class="sk-m"><i style="width:50%"></i><i style="width:30%"></i></div><i class="sk-r"></i></div>'.repeat(4);
       const { data, error } = await sb.rpc('docs_stats', { p_from: from, p_to: to });
       if (my !== seq) return;
       if (fail(error)) { stats = {}; return draw(); }

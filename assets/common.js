@@ -240,12 +240,16 @@
         <button class="nav-btn right done" data-x="right">${esc(right?.label || '')}</button></div>
       <div class="sheet-body">${body}</div>`;
     document.body.append(back, el);
-    document.body.style.overflow = 'hidden';
+    // на широком экране лист — панель справа: список слева листается и нажимается
+    const wide = window.innerWidth >= 1180;
+    if (!wide) document.body.style.overflow = 'hidden';
+    document.body.classList.add('sheet-on');
     requestAnimationFrame(() => { back.classList.add('open'); el.classList.add('open'); });
     const api = {
       el, body: el.querySelector('.sheet-body'),
       close(instant) {
-        if (current === api) current = null;
+        if (current === api) { current = null; document.body.classList.remove('sheet-on'); }
+        document.removeEventListener('keydown', onKey);
         document.body.style.overflow = '';
         back.classList.remove('open'); el.classList.remove('open');
         setTimeout(() => { back.remove(); el.remove(); }, instant ? 0 : 320);
@@ -253,6 +257,8 @@
       busy(on) { el.querySelectorAll('button').forEach((b) => (b.disabled = on)); },
     };
     back.addEventListener('click', () => api.close());
+    const onKey = (e) => { if (e.key === 'Escape' && current === api) api.close(); };
+    document.addEventListener('keydown', onKey);
     el.querySelector('[data-x=left]').addEventListener('click', () => api.close());
     const rb = el.querySelector('[data-x=right]');
     if (right) rb.addEventListener('click', () => right.onClick(api)); else rb.style.visibility = 'hidden';
@@ -290,7 +296,7 @@
     document.documentElement.dataset.theme = t;
     try { localStorage.setItem('theme', t); } catch { /* приватный режим */ }
     const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
-    document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#000000' : '#f2f2f7');
+    document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#0e1420' : '#eef1f6');
   }
   const getTheme = () => document.documentElement.dataset.theme || 'light';
 
@@ -403,6 +409,44 @@
 
   function emptyState(title, text = '') { return `<div class="empty"><div class="big">${esc(title)}</div>${esc(text)}</div>`; }
 
+  // ---------- оформление: аватар с тоном по имени, заготовки строк, значки документов, возраст долга ----------
+  const HUES = [222, 258, 290, 330, 12, 34, 152, 188];
+  const hue = (name) => { let h = 0; for (const ch of String(name || '')) h = (h * 31 + ch.codePointAt(0)) >>> 0; return HUES[h % HUES.length]; };
+  const av = (name, style = '') => `<div class="avatar" style="--h:${hue(name)};${style}">${esc(initials(name))}</div>`;
+  const skeleton = (n = 5, avatar = false) => `<div class="list skel-list" aria-busy="true" aria-label="Загрузка">${Array.from({ length: n }, (_, i) =>
+    `<div class="skel-row">${avatar ? '<i class="sk-a"></i>' : ''}<div class="sk-m"><i style="width:${58 - (i % 3) * 12}%"></i><i style="width:${34 + (i % 2) * 14}%"></i></div><i class="sk-r"></i></div>`).join('')}</div>`;
+  const DOC_IC = {
+    in: 'M12 3v10.2l3.6-3.6 1.4 1.4-6 6-6-6 1.4-1.4 3.6 3.6V3h2ZM4 19h16v2H4v-2Z',
+    pay: 'M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Zm1 2v8h16V8H4Zm8 1.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z',
+    ret: 'M9.5 5 4 10.5 9.5 16l1.4-1.4L7.8 11.5H15a4 4 0 0 1 0 8h-3v2h3a6 6 0 0 0 0-12H7.8l3.1-3.1L9.5 5Z',
+    other: 'M5 11h14v2H5v-2Zm0-5h14v2H5V6Zm0 10h9v2H5v-2Z',
+  };
+  const docIcon = (kind) => `<div class="dk ${DOC_IC[kind] ? kind : 'other'}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${DOC_IC[kind] || DOC_IC.other}"/></svg></div>`;
+  const ageCls = (days) => (days > 60 ? 'age-3' : days > 30 ? 'age-2' : '');
+  const moneyOrDash = (v, has = true) => (has && Number(v) ? fmtMoney(v) : '—');
+  // Размер текста: обычный / крупный / очень крупный (сохраняется на устройстве)
+  const setFz = (v) => { document.documentElement.dataset.fz = v; try { localStorage.setItem('fz', v); } catch { /* */ } };
+  const getFz = () => document.documentElement.dataset.fz || 'n';
+  try { const fz = localStorage.getItem('fz'); if (fz) document.documentElement.dataset.fz = fz; } catch { /* */ }
+  // Выгрузка таблицы в Excel (SheetJS грузится только при первой выгрузке)
+  function loadXLSX() {
+    if (window.XLSX) return Promise.resolve();
+    return new Promise((ok, bad) => {
+      const el = document.createElement('script'); el.src = 'vendor/xlsx.core.min.js';
+      el.onload = ok; el.onerror = () => bad(new Error('Не удалось загрузить модуль Excel'));
+      document.head.append(el);
+    });
+  }
+  async function toExcel(fileName, head, rows, widths) {
+    try { await loadXLSX(); } catch (e) { toast(e.message, true); return; }
+    const ws = window.XLSX.utils.aoa_to_sheet([head, ...rows]);
+    ws['!cols'] = (widths || head.map(() => 16)).map((w) => ({ wch: w }));
+    const wb = window.XLSX.utils.book_new(); window.XLSX.utils.book_append_sheet(wb, ws, 'Лист1');
+    window.XLSX.writeFile(wb, fileName.replace(/[\\/:*?"<>|]+/g, ' ') + '.xlsx');
+    toast('Файл Excel сохранён');
+  }
+
   window.App = { sb, repClient, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches, rank, mark, canon,
-    PAY, payView, docNo, ORD, dayGroups, monthOrder, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON };
+    PAY, payView, docNo, ORD, dayGroups, monthOrder, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON,
+    hue, av, skeleton, docIcon, ageCls, moneyOrDash, setFz, getFz, loadXLSX, toExcel };
 })();

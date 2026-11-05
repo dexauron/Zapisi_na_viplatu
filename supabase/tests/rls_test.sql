@@ -241,6 +241,19 @@ begin
     (select count(*) from public.audit_log where entity = 'docs' and action = 'purge')::text || '/'
     || (select count(*) from public.audit_log where entity = 'payouts' and entity_id = pid2 and action = 'update')::text, '2/0');
 
+  -- Сводка: только админ; кабинет ТП видит название магазина
+  perform set_config('request.jwt.claims', json_build_object('sub', emp, 'role', 'authenticated')::text, true);
+  begin perform public.summary_stats(); log := log || '65 FAIL employee read summary'::text;
+  exception when insufficient_privilege then log := log || '65 employee cannot read summary ok'::text; end;
+  perform set_config('request.jwt.claims', json_build_object('sub', adm, 'role', 'authenticated')::text, true);
+  j := public.summary_stats();
+  log := log || pg_temp.chk('66 summary has debt, aging, months, top',
+    ((j::jsonb ? 'debt') and (j::jsonb ? 'aging') and (j::jsonb ? 'months') and (j::jsonb ? 'top'))::text, 'true');
+  perform set_config('role', 'anon', true);
+  j := public.get_rep_data(tok);
+  perform set_config('role', 'authenticated', true);
+  log := log || pg_temp.chk('67 rep cabinet shows store name', j ->> 'shop', 'Магазин Тест');
+
   raise exception E'РЕЗУЛЬТАТ\n%', array_to_string(log, E'\n');
 end
 $test$;

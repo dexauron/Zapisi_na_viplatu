@@ -91,7 +91,7 @@
 
   page.innerHTML = `
     <div class="large-title">${A.esc(data.rep.full_name)}</div>
-    <div class="subtitle">${A.esc(data.rep.company || 'Торговый представитель')}</div>
+    <div class="subtitle">${A.esc([data.shop ? `Магазин «${data.shop}»` : '', data.rep.company].filter(Boolean).join(' · ') || 'Торговый представитель')}</div>
     <div class="segmented" id="seg"><button data-t="orders" class="on">Заказы · ${orders.length}</button><button data-t="payouts">Выплаты · ${payouts.length}</button>${docs.length ? `<button data-t="docs">Накладные · ${docs.length}</button>` : ''}</div>
     ${A.searchBox('q', 'Магазин, №, сумма, комментарий')}
     <div class="stats" id="stats"></div>
@@ -167,7 +167,7 @@
           html += cell(r.id, r.store || 'Заказ от ' + A.fmtShort(r.date), [A.orderWhen(r), actual(r)].filter(Boolean).join(' · '), r.amount, r.view);
         } else if (st.tab === 'docs') {
           html += cell(r.id, `${DOC[r.kind] || r.title} ${A.docNo(r)}`.trim(),
-            [A.fmtShort(r.date), r.kind === 'in' && Number(r.open) > 0 ? `не оплачено ${A.fmtMoney(r.open)}` : ''].filter(Boolean).join(' · '), r.amount, r.view);
+            [A.fmtShort(r.date), r.kind === 'in' && Number(r.open) > 0 ? `не оплачено ${A.fmtMoney(r.open)}` : ''].filter(Boolean).join(' · '), r.amount, r.view, 'doc', A.docIcon(r.kind));
         } else {
           html += cell(r.id, r.invoice_no ? 'Накладная № ' + r.invoice_no : r.basis || 'Выплата',
             [A.fmtShort(r.date), r.invoice_no && r.basis, r.status === 'paid' ? (r.received_at ? 'получено ✓' : 'подтвердите получение') : ''].filter(Boolean).join(' · '),
@@ -180,7 +180,7 @@
     $('list').querySelectorAll('.cell').forEach((c) => c.addEventListener('click', () => detail(c.dataset.id)));
     $('act')?.addEventListener('click', openAct);
   }
-  const cell = (id, t, s, amount, view, cls = '') => `<button class="cell ${cls}" data-id="${id}">
+  const cell = (id, t, s, amount, view, cls = '', icon = '') => `<button class="cell ${cls}" data-id="${id}">${icon}
     <div class="main"><div class="t"><b>${A.esc(t)}</b></div><div class="s">${A.esc(s)}</div></div>
     <div class="r"><div class="amt">${A.fmtMoney(amount)}</div>${A.pill(view)}</div></button>`;
 

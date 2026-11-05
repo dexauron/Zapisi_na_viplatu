@@ -85,7 +85,7 @@
     const items = rows.filter((r) => r.rep_id === repId);
     const r0 = items[0];
     A.sheet({ title: 'Записи', left: 'Закрыть', body: `
-      <div class="hero"><div class="avatar" style="width:64px;height:64px;font-size:24px;margin:0 auto 8px">${A.esc(A.initials(r0.rep))}</div>
+      <div class="hero">${A.av(r0.rep, 'width:64px;height:64px;font-size:24px;margin:0 auto 8px;border-radius:22px')}
         <div style="font-size:20px;font-weight:700">${A.esc(r0.rep)}</div><div class="who">${A.esc(r0.company || '')}</div>
         <div class="amount" style="font-size:28px;margin-top:8px">${A.fmtMoney(A.sum(items))}</div></div>
       <div class="section-h"><span>Записи на выплату · ${items.length}</span></div>

@@ -437,11 +437,16 @@
       document.head.append(el);
     });
   }
+  // toExcel(имя, заголовки, строки, ширины) — один лист; toExcel(имя, [{ name, head, rows, widths }, …]) — несколько листов
   async function toExcel(fileName, head, rows, widths) {
     try { await loadXLSX(); } catch (e) { toast(e.message, true); return; }
-    const ws = window.XLSX.utils.aoa_to_sheet([head, ...rows]);
-    ws['!cols'] = (widths || head.map(() => 16)).map((w) => ({ wch: w }));
-    const wb = window.XLSX.utils.book_new(); window.XLSX.utils.book_append_sheet(wb, ws, 'Лист1');
+    const sheets = head.length && typeof head[0] === 'object' && head[0].head ? head : [{ name: 'Лист1', head, rows, widths }];
+    const wb = window.XLSX.utils.book_new();
+    for (const sh of sheets) {
+      const ws = window.XLSX.utils.aoa_to_sheet([sh.head, ...sh.rows]);
+      ws['!cols'] = (sh.widths || sh.head.map(() => 16)).map((w) => ({ wch: w }));
+      window.XLSX.utils.book_append_sheet(wb, ws, sh.name.slice(0, 31));
+    }
     window.XLSX.writeFile(wb, fileName.replace(/[\\/:*?"<>|]+/g, ' ') + '.xlsx');
     toast('Файл Excel сохранён');
   }

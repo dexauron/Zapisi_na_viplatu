@@ -27,6 +27,8 @@ jobs:
           node-version: 22
       - name: Синтаксис JS
         run: for f in assets/*.js; do node --check "$f"; done
+      - name: Разбор выгрузок 1С
+        run: node --test tests/import1c.test.cjs
       - name: Все подключённые файлы существуют, ключей в коде нет
         run: |
           for page in index.html app.html list.html; do

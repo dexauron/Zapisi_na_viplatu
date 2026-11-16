@@ -42,11 +42,11 @@ Email из таблицы `admins` при первом входе получае
 `.github/workflows/keepalive.yml` раз в день делает один гостевой запрос (бесплатный Supabase засыпает после 7 дней без запросов).
 Ничего настраивать не нужно — используются те же переменные `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`.
 
-## Резервная копия
-`.github/workflows/backup.yml` каждую ночь (02:17 МСК) выгружает все таблицы в Excel и JSON и упаковывает в 7z с паролем.
+## Ночная выгрузка данных
+`.github/workflows/backup.yml` каждую ночь (02:17 МСК) выгружает рабочие таблицы в Excel и JSON и упаковывает в 7z с паролем.
 1. Settings → Secrets and variables → Actions → **Secrets** → New repository secret:
    - `SUPABASE_SECRET_KEY` — Supabase → Project Settings → API Keys → Secret keys (`sb_secret_…`);
    - `BACKUP_PASSWORD` — свой пароль от архивов (без него архив не открыть).
 2. Скачать копию: Actions → «Резервная копия» → нужный запуск → Artifacts → `sverka-backup` (хранится 30 дней).
    Открыть: 7-Zip / «Архиватор» → пароль `BACKUP_PASSWORD`.
-Восстановление: таблицы из JSON вставляются через SQL-редактор Supabase в порядке stores → reps → rep_access → staff → orders → payouts.
+Для полного восстановления проекта нужна отдельная резервная копия PostgreSQL с рабочей схемой, Auth и приватными таблицами. Ночная выгрузка читает таблицы отдельными запросами, поэтому при работе пользователей они могут относиться к разным моментам времени.

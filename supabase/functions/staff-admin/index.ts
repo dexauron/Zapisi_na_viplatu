@@ -11,6 +11,7 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 
 const LOGIN_RE = /^[a-z0-9._-]{3,32}$/;
+const UUID_RE = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i;
 const DOMAIN = "staff.zapisi.app";
 const REP_DOMAIN = "rep.zapisi.app"; // учётки представителей: видят только своё через my_rep_data()
 
@@ -27,11 +28,23 @@ Deno.serve(async (req) => {
   const { data: { user } } = await service.auth.getUser(jwt);
   if (!user) return json({ error: "Нужен вход" }, 401);
 
-  const { data: me } = await service.from("staff").select("role, active").eq("user_id", user.id).maybeSingle();
+  const { data: me, error: profileError } = await service.from("staff").select("role, active").eq("user_id", user.id).maybeSingle();
+  if (profileError) return json({ error: "Не удалось проверить права администратора" }, 503);
   if (!me || me.role !== "admin" || !me.active) return json({ error: "Только для администратора" }, 403);
 
-  let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return json({ error: "Неверный запрос" }, 400); }
+  let input: unknown;
+  try { input = await req.json(); } catch { return json({ error: "Неверный запрос" }, 400); }
+  if (!input || typeof input !== "object" || Array.isArray(input)) return json({ error: "Неверный запрос" }, 400);
+  const body = input as Record<string, unknown>;
+
+  const staffId = String(body.user_id ?? "");
+  if (body.action === "update" || body.action === "delete") {
+    if (!UUID_RE.test(staffId)) return json({ error: "Неверный идентификатор сотрудника" }, 400);
+    const { data: target, error: targetError } =
+      await service.from("staff").select("user_id").eq("user_id", staffId).maybeSingle();
+    if (targetError) return json({ error: "Не удалось проверить учётную запись сотрудника" }, 503);
+    if (!target) return json({ error: "Сотрудник не найден" }, 404);
+  }
 
   if (body.action === "create") {
     const login = String(body.login ?? "").trim().toLowerCase();
@@ -57,7 +70,7 @@ Deno.serve(async (req) => {
   }
 
   if (body.action === "update") {
-    const id = String(body.user_id ?? "");
+    const id = staffId;
     const patch: Record<string, unknown> = {};
     if (typeof body.full_name === "string" && body.full_name.trim()) patch.full_name = body.full_name.trim();
     if (body.role === "admin" || body.role === "employee") patch.role = body.role;
@@ -85,8 +98,8 @@ Deno.serve(async (req) => {
   }
 
   if (body.action === "delete") {
-    const id = String(body.user_id ?? "");
-    if (!id || id === user.id) return json({ error: "Нельзя удалить самого себя" }, 400);
+    const id = staffId;
+    if (id === user.id) return json({ error: "Нельзя удалить самого себя" }, 400);
     // записи сотрудника остаются: в заказах автор станет пустым, история изменений сохранится
     const { error } = await service.auth.admin.deleteUser(id);
     if (error) return json({ error: error.message }, 400);
@@ -96,6 +109,7 @@ Deno.serve(async (req) => {
   // ---- Представители: логин и пароль для кабинета (по желанию админа, вместе с личной ссылкой) ----
   if (body.action === "rep_create") {
     const rep_id = String(body.rep_id ?? "");
+    if (!UUID_RE.test(rep_id)) return json({ error: "Неверный идентификатор представителя" }, 400);
     const login = String(body.login ?? "").trim().toLowerCase();
     const password = String(body.password ?? "");
     if (!LOGIN_RE.test(login)) return json({ error: "Логин: 3–32 символа, латиница, цифры, . _ -" }, 400);
@@ -121,6 +135,7 @@ Deno.serve(async (req) => {
 
   if (body.action === "rep_update" || body.action === "rep_delete") {
     const rep_id = String(body.rep_id ?? "");
+    if (!UUID_RE.test(rep_id)) return json({ error: "Неверный идентификатор представителя" }, 400);
     const { data: ru } = await service.from("rep_users").select("user_id, rep_id, login, active").eq("rep_id", rep_id).maybeSingle();
     if (!ru) return json({ error: "У представителя нет входа" }, 404);
     if (body.action === "rep_delete") {

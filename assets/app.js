@@ -2000,6 +2000,26 @@
 
   // ---------- загрузка справочника представителей из 1С ----------
   const loadXLSX = () => A.loadXLSX();
+  const appScript = document.currentScript.src;
+  function read1CFile(file) {
+    const url = new URL('import1c-worker.js', appScript);
+    url.search = new URL(appScript).search;
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(url);
+      const done = () => { clearTimeout(timer); worker.terminate(); };
+      const fail = (message) => { done(); reject(new Error(message)); };
+      const timer = setTimeout(() => fail('Чтение файла заняло больше двух минут. Попробуйте выгрузку за меньший период.'), 120000);
+      worker.onmessage = ({ data }) => {
+        if (data.error) return fail(data.error);
+        done();
+        resolve(data.parsed);
+      };
+      worker.onerror = () => fail('Не удалось запустить модуль чтения Excel. Обновите страницу.');
+      worker.onmessageerror = () => fail('Браузер не смог получить данные прочитанного файла.');
+      try { worker.postMessage(file); }
+      catch { fail('Браузер не смог открыть выбранный файл.'); }
+    });
+  }
   // Загрузка выгрузок 1С: справочник контрагентов + документы (несколько файлов за раз)
   const FILE_KIND = { kontr: 'Контрагенты', vzaimo: 'Взаиморасчёты с контрагентами' };
   const reportPeriod = (from, to) => from && to ? `${A.fmtDate(from)} – ${A.fmtDate(to)}` : '';
@@ -2060,20 +2080,17 @@
       const files = [...input.files]; input.value = ''; if (!files.length) return;
       if (running) return;
       pick.disabled = true;
-      box.innerHTML = '<div class="spinner" style="margin:24px auto"></div>';
+      box.innerHTML = '<div class="spinner" style="margin:24px auto"></div><div class="footer-note" role="status"></div>';
+      const status = box.querySelector('[role=status]');
       parsed = []; groups = []; reports = []; docStats = new Map();
       let filename = '';
       try {
-        await loadXLSX();
-        for (const file of files) {
+        for (const [index, file] of files.entries()) {
           filename = file.name;
-          const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const raw = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true, range: 0 });
-          const p = window.Doc1C.parse(raw); p.name = file.name;
+          status.textContent = `Читаем файл ${index + 1} из ${files.length} · ${filename}`;
+          const p = await read1CFile(file);
+          p.name = filename;
           if (p.info.kind === 'kontr') {
-            p.reps = window.RepImport.parseRows(window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false }));
-            if (!p.reps.length) throw new Error('В файле нет ни одного контрагента');
             p.diff = window.RepImport.diff(p.reps, st.reps);
           }
           parsed.push(p);

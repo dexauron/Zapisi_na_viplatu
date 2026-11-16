@@ -1587,9 +1587,10 @@
     $('body').innerHTML = `<div id="one-top"></div><div id="one-list">${A.skeleton(6)}</div>
       <div class="section-h"><span>Данные 1С</span></div><div class="list">
         <button class="cell action" data-one="import">Загрузить из 1С</button>
+        <button class="cell action" data-one="registers">Причины возвратов и списаний</button>
         <button class="cell action" data-one="xls">Выгрузить в Excel</button>
         <button class="cell danger" data-one="purge">Удалить загруженное за период</button></div>
-      <div class="footer-note">Контрагенты, приходные накладные, расходные кассовые ордера, возвраты, «Взаиморасчёты с контрагентами» — можно несколько файлов сразу.
+      <div class="footer-note">Справочник, списки документов, ведомость взаиморасчётов и отчёты по причинам можно выбрать одновременно.
         Повторная загрузка обновляет изменения, копий не будет.</div>`;
     $('body').addEventListener('click', oneClick);
     render.body = drawOneList;
@@ -1715,6 +1716,7 @@
     if (e.target.closest('[data-more]')) { st.one.limit += 300; drawOneList(); return; }
     const a = e.target.closest('[data-one]')?.dataset.one;
     if (a === 'import') return import1C();
+    if (a === 'registers') return showRegisterReports();
     if (a === 'purge') return purge1C();
     if (a === 'xls') return oneExcel();
     const c = e.target.closest('[data-rep]'); if (c) repDetail(c.dataset.rep, 'docs');
@@ -2000,25 +2002,66 @@
   const loadXLSX = () => A.loadXLSX();
   // Загрузка выгрузок 1С: справочник контрагентов + документы (несколько файлов за раз)
   const FILE_KIND = { kontr: 'Контрагенты', vzaimo: 'Взаиморасчёты с контрагентами' };
+  const reportPeriod = (from, to) => from && to ? `${A.fmtDate(from)} – ${A.fmtDate(to)}` : '';
+  const importCount = (n) => Number(n ?? 0).toLocaleString('ru-RU');
+  const importLine = (label, value) => `<div class="cell static"><div class="main">${E(label)}</div><div class="value">${E(value)}</div></div>`;
+  async function showRegisterReports() {
+    const api = A.sheet({ title: 'Причины возвратов и списаний', left: 'Закрыть', body: A.skeleton(3) });
+    const { data, error } = await sb.from('one_c_register_reports').select('id,kind,period_start,period_end,row_count,summary')
+      .order('period_end', { ascending: false }).order('period_start', { ascending: false }).order('kind').limit(100);
+    if (error) {
+      api.body.innerHTML = A.emptyState('Не удалось открыть отчёты', humanError(error));
+      return;
+    }
+    if (!data.length) {
+      api.body.innerHTML = A.emptyState('Отчётов пока нет', 'Добавьте выгрузки через «Загрузить из 1С»');
+      return;
+    }
+    api.body.innerHTML = data.map((r) => `<details class="list" style="margin:8px 0"><summary class="cell">
+        <div class="main"><div class="t">${E(window.Doc1C.registers[r.kind].title)}</div>
+        <div class="s">${E(reportPeriod(r.period_start, r.period_end))} · ${importCount(r.row_count)} строк</div></div>
+        <div class="r">${E(A.fmtMoney(r.summary.total.cost / 100))}</div><span class="chev" aria-hidden="true">⌄</span></summary>
+        ${r.summary.reasons.map((reason) => `<div class="cell static"><div class="main"><div class="t">${E(reason.reason || 'Без указанной причины')}</div>
+          <div class="s">${importCount(reason.movements)} записей</div></div><div class="r">${E(A.fmtMoney(reason.cost / 100))}</div></div>`).join('')}
+        <button class="cell action" type="button" data-report="${E(r.id)}">Строки отчёта в Excel</button></details>`).join('');
+    api.body.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-report]');
+      if (!button || button.disabled) return;
+      const info = data.find((r) => r.id === button.dataset.report);
+      button.disabled = true;
+      try {
+        const { data: report, error: readError } = await sb.from('one_c_register_reports').select('rows').eq('id', info.id).single();
+        if (readError) throw readError;
+        const unpack = (n, scale) => n == null ? null : n / scale;
+        const returns = info.kind === 'returns_by_reason';
+        await A.toExcel(`${window.Doc1C.registers[info.kind].title} ${reportPeriod(info.period_start, info.period_end)}`, [{
+          name: 'Регистр', head: ['Номенклатура', 'Склад', 'Причина', 'Контрагент', ...(returns ? ['Договор'] : []),
+            'Количество', 'Себестоимость', 'Приходная сумма (регл.)', 'Приходная сумма (упр.)', 'Розничная сумма', 'Записей'],
+          rows: report.rows.map((r) => [r.item, r.warehouse, r.reason, r.supplier, ...(returns ? [r.contract] : []),
+            unpack(r.quantity, 1000), unpack(r.cost, 100), unpack(r.receipt, 100), unpack(r.managementReceipt, 100), unpack(r.retail, 100), r.movements]),
+        }]);
+      } catch (e) { A.toast(humanError(e), true); }
+      finally { button.disabled = false; }
+    });
+  }
   function import1C() {
     const api = A.sheet({ title: 'Загрузка из 1С', left: 'Закрыть', body: `
-      <div class="footer-note" style="margin:12px 4px">В 1С: список документов или справочника → «Ещё» → «Вывести список» → сохранить в Excel.
-        Отчёт «Взаиморасчёты с контрагентами» — сохранить в Excel как есть. Можно выбрать несколько файлов сразу.</div>
+      <div class="footer-note" style="margin:12px 4px">Для списка документов или справочника в 1С выберите «Ещё» → «Вывести список» и сохраните в Excel.
+        Ведомость взаиморасчётов и регистры причин сохраните в Excel вместе с итогами. Можно выбрать несколько файлов сразу.</div>
       <input type="file" id="imp-file" accept=".xls,.xlsx" multiple class="hidden">
       <button class="btn blue" type="button" data-act="pick">Выбрать файлы</button>
       <div id="imp-preview"></div>` });
     const f = api.body, input = f.querySelector('#imp-file'), box = f.querySelector('#imp-preview');
     const pick = f.querySelector('[data-act=pick]');
-    let parsed = [], groups = [], running = false;
-    const line = (k, v, c = '') => `<div class="cell static"><div class="main">${E(k)}</div><div class="value" ${c ? `style="color:var(--${c})"` : ''}>${E(v)}</div></div>`;
-    const period = (sc) => (sc?.from ? `${A.fmtDate(sc.from)} – ${A.fmtDate(sc.to)}` : '');
+    let parsed = [], groups = [], reports = [], docStats = new Map(), running = false;
+    const line = importLine, n = importCount;
     onActs(api, { pick: () => input.click(), run: () => run() });
     input.addEventListener('change', async () => {
       const files = [...input.files]; input.value = ''; if (!files.length) return;
       if (running) return;
       pick.disabled = true;
       box.innerHTML = '<div class="spinner" style="margin:24px auto"></div>';
-      parsed = []; groups = [];
+      parsed = []; groups = []; reports = []; docStats = new Map();
       let filename = '';
       try {
         await loadXLSX();
@@ -2026,34 +2069,47 @@
           filename = file.name;
           const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
           const ws = wb.Sheets[wb.SheetNames[0]];
-          const raw = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+          const raw = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true, range: 0 });
           const p = window.Doc1C.parse(raw); p.name = file.name;
           if (p.info.kind === 'kontr') {
             p.reps = window.RepImport.parseRows(window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false }));
+            if (!p.reps.length) throw new Error('В файле нет ни одного контрагента');
             p.diff = window.RepImport.diff(p.reps, st.reps);
           }
           parsed.push(p);
         }
         filename = '';
-        groups = window.Doc1C.merge(parsed.filter((p) => p.rows));
+        ({ groups, stats: docStats } = window.Doc1C.prepareDocs(parsed.filter((p) => p.rows)));
+        reports = window.Doc1C.mergeReports(parsed);
       } catch (e) {
-        parsed = []; groups = [];
+        parsed = []; groups = []; reports = [];
         box.innerHTML = A.emptyState('Импорт остановлен', [filename, e.message || 'Не удалось прочитать файл'].filter(Boolean).join(' · '));
         return;
       } finally { pick.disabled = false; }
-      const ok = parsed.filter((p) => p.info.kind);
+      const canImport = groups.length || reports.length || parsed.some((p) => p.reps?.length);
       box.innerHTML = parsed.map((p) => {
         if (p.info.kind === 'kontr') return `<div class="section-h"><span>${E(p.name)}</span></div><div class="list">${line('Вид', 'Контрагенты')}
           ${line('В файле', p.reps.length)}${line('Новых', p.diff.added.length)}${line('Изменится', p.diff.updated.length)}</div>`;
-        if (!p.info.kind) return `<div class="section-h"><span>${E(p.name)}</span></div><div class="list">${line('Не распознан', 'нужна выгрузка из 1С', 'red')}</div>`;
+        if (!p.info.kind) return `<div class="section-h"><span>${E(p.name)}</span></div><div class="footer-note warn">Формат выгрузки 1С не распознан.</div>`;
+        if (p.report) return `<div class="section-h"><span>${E(p.name)}</span></div><div class="list">
+          ${line('Вид', p.info.object)}${line('Период', reportPeriod(p.info.from, p.info.to))}
+          ${line('Строк в отчёте', n(p.report.row_count))}${line('Себестоимость по 1С', A.fmtMoney(p.report.summary.total.cost / 100))}</div>`;
+        const stats = docStats.get(p);
+        const missing = p.missingAmounts || [];
         const inc = p.rows.reduce((a, r) => a + A.toCents(r.inc), 0) / 100, dec = p.rows.reduce((a, r) => a + A.toCents(r.dec), 0) / 100;
         return `<div class="section-h"><span>${E(p.name)}</span></div><div class="list">${line('Вид', FILE_KIND[p.info.kind] || p.info.object)}
-          ${line('Период', period(p.scope))}${line('Документов', p.rows.length.toLocaleString('ru-RU'))}
-          ${inc ? line('Приход', A.fmtMoney(inc)) : ''}${dec ? line('Оплаты и возвраты', A.fmtMoney(dec)) : ''}
-          ${p.skipped ? line('Пропущено', p.skipped) : ''}</div>
-          ${p.skipped ? '<div class="footer-note">Для этой выгрузки отключена отметка отсутствующих документов как удалённых.</div>' : ''}`;
-      }).join('') + (ok.length ? `<div class="footer-note">Уже загруженные документы не задвоятся: изменения обновятся и попадут в историю.
-          Ручные отметки («Пришёл», «Оплачено») не отменяются.</div><button class="btn blue" type="button" data-act="run">Загрузить</button>
+          ${line('Период', reportPeriod(p.info.from || p.scope.from, p.info.to || p.scope.to))}
+          ${line('Строк с документами', n(p.rows.length))}
+          ${inc ? line('Приход в файле', A.fmtMoney(inc)) : ''}${dec ? line('Оплаты и возвраты в файле', A.fmtMoney(dec)) : ''}
+          ${p.otherOperations ? line('Прочие операции РКО', n(p.otherOperations)) : ''}
+          ${p.skipped ? line('Пропущено строк документов', n(p.skipped)) : ''}
+          ${stats?.recovered ? line('Сумма найдена в ведомости', n(stats.recovered)) : ''}
+          ${stats?.unconfirmed ? line('Пропущено без движения в ведомости', n(stats.unconfirmed)) : ''}
+          ${stats?.blank ? line('Пропущено без суммы', n(stats.blank)) : ''}</div>
+          ${missing.length ? `<div class="footer-note warn">Пустая сумма в строках ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ' и далее' : ''}.</div>` : ''}
+          ${p.skipped || missing.length ? '<div class="footer-note">Для этого списка отключена отметка отсутствующих документов как удалённых.</div>' : ''}`;
+      }).join('') + (canImport ? `<div class="footer-note">${n(groups.reduce((sum, g) => sum + g.rows.length, 0))} уникальных документов к загрузке.
+          При повторной загрузке программа обновит документы и отчёты за тот же период.</div><button class="btn blue" type="button" data-act="run">Загрузить</button>
           <div id="imp-progress" class="footer-note" style="text-align:center"></div>` : '');
       f.querySelector('[data-act=pick]').textContent = 'Выбрать другие файлы';
       f.querySelector('[data-act=pick]').className = 'btn plain';
@@ -2065,13 +2121,20 @@
       api.busy(true);
       const res = { added: 0, updated: 0, same: 0, reps_added: 0 }; let fin = null, repsRes = null;
       try {
+        if (reports.length) {
+          say('Отчёты по причинам…');
+          const imported_at = new Date().toISOString();
+          const { error } = await sb.from('one_c_register_reports').upsert(reports.map((r) => ({ ...r, imported_at })),
+            { onConflict: 'kind,period_start,period_end', defaultToNull: false });
+          if (error) throw error;
+        }
         for (const p of parsed.filter((x) => x.info.kind === 'kontr')) {
           say('Справочник контрагентов…');
           const { data, error } = await sb.rpc('import_reps', { p_rows: p.reps, p_deactivate_missing: false }); if (error) throw error;
           repsRes = data;
         }
         const docFiles = parsed.filter((x) => x.info.kind === 'list' || x.info.kind === 'vzaimo');
-        if (docFiles.length) {
+        if (groups.length) {
           const total = groups.reduce((a, g) => a + g.rows.length, 0);
           const imp = uuid(); let done = 0;
           for (const g of groups) {
@@ -2102,8 +2165,8 @@
         return A.toast(humanError(e), true);
       }
       if (await loadAll()) { lastLoad = Date.now(); render(); }
-      const n = (v) => Number(v || 0).toLocaleString('ru-RU');
       box.innerHTML = `<div class="section-h"><span>Готово</span></div><div class="list">
+          ${reports.length ? line('Отчётов по причинам загружено', n(reports.length)) : ''}
           ${repsRes ? line('Контрагентов добавлено / обновлено', `${n(repsRes.added)} / ${n(repsRes.updated)}`) : ''}
           ${fin ? line('Новых документов', n(res.added)) + line('Изменилось', n(res.updated)) + line('Без изменений', n(res.same))
             + (fin.deleted ? line('Удалены в 1С (помечены)', n(fin.deleted), 'red') : '')
@@ -2111,8 +2174,9 @@
             + line('Заказов отмечено «Пришёл»', n(fin.orders)) + line('Записей связано с накладными', n(fin.payouts_linked))
             + line('Записей отмечено «Оплачено» по 1С', n(fin.payouts_paid)) : ''}</div>
         ${fin?.not_deleted?.length ? `<div class="footer-note warn">Похоже, файл неполный (${E(fin.not_deleted.join('; '))}) — отсутствующие документы не помечены удалёнными.</div>` : ''}
+        ${reports.length ? btn('registers', 'Открыть отчёты по причинам') : ''}
         ${st.unrec?.n ? `<button class="btn plain" type="button" data-act="unrec">Накладные без записи · ${st.unrec.n}</button>` : ''}`;
-      onActs(api, { unrec: () => { api.close(); openOneC('norec'); } });
+      onActs(api, { unrec: () => { api.close(); openOneC('norec'); }, registers: () => { api.close(); showRegisterReports(); } });
       f.querySelector('[data-act=pick]').classList.add('hidden');
       api.busy(false);
     }

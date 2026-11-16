@@ -26,6 +26,7 @@ TABLES = {
     "rep_access": ("Ссылки ТП", "rep_id"),
     "rep_users": ("Учётки ТП", "user_id"),
     "docs": ("Документы 1С", "id"),
+    "one_c_register_reports": ("Регистры 1С", "id"),
     "audit_log": ("История", "id"),
     "admins": ("Владельцы", "email"),
 }
@@ -38,7 +39,7 @@ def fetch(table, key):
     if KEY.startswith("eyJ"):
         headers["Authorization"] = f"Bearer {KEY}"
     while True:
-        params = {"select": "*", "order": f"{key}.asc", "limit": PAGE}
+        params = {"select": "*", "order": f"{key}.asc", "limit": 5 if table == "one_c_register_reports" else PAGE}
         if cursor is not None:
             params[key] = f"gt.{cursor}"
         req = urllib.request.Request(
@@ -71,6 +72,9 @@ def main():
         ws = wb.create_sheet(title)
         rows = data[t]
         cols = list(rows[0].keys()) if rows else ["(пусто)"]
+        if t == "one_c_register_reports" and rows:
+            # Excel ограничивает длину ячейки. Полные строки и итоги сохранены в JSON.
+            cols = [c for c in cols if c not in {"rows", "summary"}]
         if "rep_id" in cols:
             cols.insert(cols.index("rep_id") + 1, "rep_name")
         ws.append(cols)

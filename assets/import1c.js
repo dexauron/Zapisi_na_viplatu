@@ -1,19 +1,20 @@
-// Разбор выгрузок 1С (УНФ) в документы для загрузки: приходные накладные, расходные кассовые ордера,
-// возвраты поставщику и отчёт «Взаиморасчёты с контрагентами». Справочник «Контрагенты» — в import.js.
+// Разбор выгрузок 1С: документы, взаиморасчёты и регистры причин. Справочник «Контрагенты» — в import.js.
 // Чистые функции: работают и в браузере (window.Doc1C), и в Node (тесты).
 (function (root) {
   const clean = (v) => String(v ?? '').replace(/ /g, ' ').replace(/\s+/g, ' ').trim();
-  const num = (v) => {
-    if (typeof v === 'number' && Math.abs(v) < 0.005) return 0;
+  const scaled = (v, places) => {
+    const scale = 10 ** places;
+    if (typeof v === 'number' && Math.abs(v) < 0.5 / scale) return 0;
     const s = clean(v).replace(/\s/g, '').replace(',', '.');
     const parts = s.match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
     if (!parts) return null;
     const [, sign, whole, fraction = ''] = parts;
     const integer = Number(whole);
     if (integer > 999999999999) return null;
-    const cents = integer * 100 + Number(fraction.slice(0, 2).padEnd(2, '0')) + (fraction[2] >= '5' ? 1 : 0);
-    return cents <= 99999999999999 ? (sign === '-' ? -cents : cents) / 100 : null;
+    const result = integer * scale + Number(fraction.slice(0, places).padEnd(places, '0')) + (fraction[places] >= '5' ? 1 : 0);
+    return Number.isSafeInteger(result) && result < 1e12 * scale ? (sign === '-' ? -result : result) : null;
   };
+  const num = (v) => { const cents = scaled(v, 2); return cents == null ? null : cents / 100; };
   const pad = (n) => String(n).padStart(2, '0');
   // «31.08.2026», «31.08.2026 9:35:07», дата Excel (число) или Date
   function date(v, withTime = false) {
@@ -46,23 +47,40 @@
   const KIND = { 'Приходная накладная': 'in', 'Расходный кассовый ордер': 'pay', 'Расход со счета': 'pay',
     'Платежное поручение исходящее': 'pay', 'Возврат поставщику': 'ret' };
   const kindOf = (title) => KIND[title] || 'other';
+  const REGISTERS = {
+    returns_by_reason: { title: 'Причины возвратов поставщикам', reason: 'Причина возврата', supplier: 'Регистратор.Контрагент' },
+    writeoff_reasons: { title: 'Причины списания', reason: 'Причина списания', supplier: 'Партия, Контрагент' },
+  };
+  const REGISTER_NUMBERS = {
+    quantity: ['Количество', 3],
+    cost: ['Себестоимость в регламентной валюте', 2],
+    receipt: ['Приходная сумма в регламентной валюте', 2],
+    managementReceipt: ['Приходная сумма в управленческой валюте', 2],
+    retail: ['Розничная сумма в регламентной валюте', 2],
+    movements: ['Количество записей', 0],
+  };
 
   function meta(aoa) {
-    const m = { object: '', type: '', from: null, to: null };
+    const m = { object: '', type: '', from: null, to: null, filtered: false };
     for (const row of aoa.slice(0, 12)) for (const c of row || []) {
       const s = clean(c);
       let x;
       if ((x = s.match(/^Имя объекта:\s*(.+)$/))) m.object = x[1];
       else if ((x = s.match(/^Тип объекта:\s*(.+)$/))) m.type = x[1];
       else if ((x = s.match(/^Период:\s*(\d{1,2}\.\d{1,2}\.\d{4})\s*-\s*(\d{1,2}\.\d{1,2}\.\d{4})/))) { m.from = date(x[1]); m.to = date(x[2]); }
+      else if (/^Отбор\s*:/i.test(s)) m.filtered = true;
     }
     return m;
   }
 
-  // Что за файл: kontr | list | vzaimo | null
   function detect(aoa) {
     const m = meta(aoa);
     if (m.type === 'Справочник' && /контрагент/i.test(m.object)) return { kind: 'kontr', ...m };
+    const register = m.type === 'Регистр накопления' && Object.entries(REGISTERS).find(([, x]) => x.title === m.object);
+    if (register) {
+      const head = aoa.slice(0, 15).findIndex((r) => (r || []).map(clean).includes(register[1].reason));
+      return { kind: register[0], head, ...m };
+    }
     for (let i = 0; i < Math.min(aoa.length, 15); i++) {
       const row = (aoa[i] || []).map(clean);
       if (row[0] === 'Контрагент' && row.some((c) => /Увеличение долга/i.test(c)) && row.some((c) => /Уменьшение долга/i.test(c))) {
@@ -83,12 +101,12 @@
     const c = {
       kontr: col('Контрагент'), amount: AMOUNT_HEADS.map(col).find((i) => i >= 0) ?? -1, retail: col('Сумма документа розница'),
       in_no: col('Входящий номер документа'), pay_due: col('Дата оплаты'), basis: col('Документ основание'),
-      article: col('Статья ДДС'), cash: col('Касса'), comment: col('Комментарий'),
+      article: col('Статья ДДС'), cash: col('Касса'), comment: col('Комментарий'), operation: col('Вид операции'),
     };
     if (c.kontr < 0 || c.amount < 0) throw new Error(`«${info.object}»: не найдены столбцы «Контрагент» и «Сумма»`);
     const title = info.object, inc = INC.has(title);
     const fields = ['inc', 'dec', ...['retail', 'in_no', 'pay_due', 'basis', 'article', 'cash', 'comment'].filter((k) => c[k] >= 0)];
-    const rows = []; let skipped = 0;
+    const rows = [], missingAmounts = []; let skipped = 0, otherOperations = 0;
     for (let i = info.head + 1; i < aoa.length; i++) {
       const r = aoa[i];
       const d = docTitle(r?.[0]);
@@ -96,9 +114,18 @@
         if (clean(r?.[0]).startsWith(title + ' ') && /\sот\s/.test(clean(r[0]))) throw new Error(`Строка ${i + 1}: неверная дата или номер документа`);
         continue;
       }
+      const operation = clean(r[c.operation]);
+      if (title === 'Расходный кассовый ордер' && c.operation >= 0 && operation.toLowerCase() !== 'выплата контрагенту') {
+        otherOperations++;
+        if (!operation) skipped++;
+        continue;
+      }
       const kontr = clean(r[c.kontr]); const amount = num(r[c.amount]);
       if (d.title !== title || !kontr || amount < 0) { skipped++; continue; } // расход на нужды магазина, ККМ и т. п.
-      if (amount == null) throw new Error(`Строка ${i + 1}: неверная сумма документа`);
+      if (amount == null) {
+        if (clean(r[c.amount])) throw new Error(`Строка ${i + 1}: неверная сумма документа`);
+        missingAmounts.push(i + 1);
+      }
       const row = { title: d.title, num: d.num, at: d.at, kontr, inc: inc ? amount : 0, dec: inc ? 0 : amount, src: 'l' };
       if (c.retail >= 0) row.retail = num(r[c.retail]);
       if (c.in_no >= 0) { const x = clean(r[c.in_no]); row.in_no = !x || /ручн/i.test(x) ? null : x; }
@@ -109,18 +136,24 @@
       if (c.comment >= 0) { const x = clean(r[c.comment]); row.comment = !x || /^Введен на основании/i.test(x) ? null : x; }
       rows.push(row);
     }
-    return { rows, fields, skipped, scope: scopeOf(rows, info, [title], false, skipped) };
+    return { rows, fields, skipped, missingAmounts, otherOperations, scope: scopeOf(rows, info, [title], false, skipped || missingAmounts.length) };
   }
 
   // Отчёт «Взаиморасчёты с контрагентами»: Контрагент → Договор → Период → Документ движения
   function parseVzaimo(aoa, info) {
     const head = (aoa[info.head] || []).map(clean);
     const ci = head.findIndex((h) => /Увеличение долга/i.test(h)), cd = head.findIndex((h) => /Уменьшение долга/i.test(h));
-    const rows = []; let kontr = null, skipped = 0;
+    const rows = []; let kontr = null, skipped = 0, total = null;
     for (let i = info.head + 1; i < aoa.length; i++) {
       const r = aoa[i];
       const a = clean(r?.[0]);
-      if (!a || a === 'Итого' || /^Договор$|^Период|^Документ движения$/.test(a)) continue;
+      if (a === 'Итого') {
+        if (total) throw new Error(`Строка ${i + 1}: повторная строка «Итого»`);
+        total = [ci, cd].map((col) => clean(r[col]) ? scaled(r[col], 2) : 0);
+        if (total.includes(null)) throw new Error(`Строка ${i + 1}: неверная сумма в строке «Итого»`);
+        continue;
+      }
+      if (!a || /^Договор$|^Период|^Документ движения$/.test(a)) continue;
       if (/^\d{1,2}\.\d{1,2}\.\d{4}(\s+\d{1,2}:\d{2}(:\d{2})?)?$/.test(a)) continue; // строка периода
       const d = docTitle(a);
       if (d) {
@@ -133,7 +166,54 @@
       else kontr = a;
     }
     const titles = [...new Set(rows.map((r) => r.title))];
-    return { rows, fields: ['inc', 'dec'], skipped, scope: scopeOf(rows, info, titles, true, skipped) };
+    const sums = rows.reduce(([inc, dec], r) => [inc + Math.round(r.inc * 100), dec + Math.round(r.dec * 100)], [0, 0]);
+    const checkedTotal = total !== null && total.every((v, i) => v === sums[i]);
+    if (total && !checkedTotal) throw new Error('Суммы документов не совпадают с итогом ведомости 1С');
+    return { rows, fields: ['inc', 'dec'], skipped, checkedTotal, scope: scopeOf(rows, info, titles, true, skipped || info.filtered) };
+  }
+
+  function parseRegister(aoa, info) {
+    if (!info.from || !info.to || info.from > info.to) throw new Error('Нужен период отчёта 1С');
+    if (info.filtered) throw new Error('Снимите отборы в регистре и выгрузите весь отчёт за период');
+    const config = REGISTERS[info.kind], head = (aoa[info.head] || []).map(clean);
+    const dimensions = Object.entries({ item: 'Номенклатура', warehouse: 'Склад', reason: config.reason,
+      supplier: config.supplier, ...(info.kind === 'returns_by_reason' ? { contract: 'Договор' } : {}) })
+      .map(([key, label]) => [key, head.indexOf(label)]);
+    const measures = Object.entries(REGISTER_NUMBERS).map(([key, [label, places]]) => [key, head.indexOf(label), places, label]);
+    if ([...dimensions, ...measures].some(([, col]) => col < 0)) throw new Error('В регистре отсутствуют обязательные столбцы');
+    const rows = [], reasons = new Map(), total = Object.fromEntries(measures.map(([key]) => [key, 0]));
+    let reportedTotal = null;
+    for (let i = info.head + 1; i < aoa.length; i++) {
+      const cells = aoa[i] || [];
+      if (!cells.some(clean)) continue;
+      const isTotal = clean(cells[0]) === 'Итого' && dimensions.every(([, col]) => col === 0 || !clean(cells[col]));
+      if (reportedTotal) throw new Error(`Строка ${i + 1}: данные после строки «Итого»`);
+      const row = {};
+      for (const [key, col, places, label] of measures) {
+        const value = clean(cells[col]);
+        const number = value ? scaled(value, places) : null;
+        if ((value && number == null) || (key === 'quantity' && number == null) ||
+            (key === 'movements' && (number == null || number < (isTotal ? 0 : 1) || !/^\+?\d+(?:[.,]0+)?$/.test(value.replace(/\s/g, ''))))) {
+          throw new Error(`Строка ${i + 1}: неверное значение «${label}»`);
+        }
+        row[key] = number;
+      }
+      if (isTotal) { reportedTotal = row; continue; }
+      for (const [key, col] of dimensions) row[key] = clean(cells[col]) || null;
+      for (const [key] of measures) total[key] += row[key] ?? 0;
+      const reason = reasons.get(row.reason) || { reason: row.reason, cost: 0, movements: 0 };
+      reason.cost += row.cost ?? 0;
+      reason.movements += row.movements;
+      reasons.set(row.reason, reason);
+      rows.push(row);
+    }
+    if (rows.length > 100000) throw new Error('В регистре больше 100 000 строк. Выгрузите меньший период.');
+    if (!reportedTotal) throw new Error('В регистре нет строки «Итого»');
+    if (measures.some(([key]) => !Number.isSafeInteger(total[key]) || total[key] !== (reportedTotal[key] ?? 0))) {
+      throw new Error('Суммы строк регистра не совпадают с итогом 1С');
+    }
+    return { kind: info.kind, period_start: info.from, period_end: info.to, row_count: rows.length,
+      summary: { total, reasons: [...reasons.values()].sort((a, b) => b.cost - a.cost) }, rows };
   }
 
   // Период для поиска удалённых: только дни, которые есть в файле (выгрузка списка бывает обрезана
@@ -155,13 +235,30 @@
     const info = detect(aoa);
     if (info.kind === 'list') return { info, ...parseList(aoa, info) };
     if (info.kind === 'vzaimo') return { info, ...parseVzaimo(aoa, info) };
+    if (Object.prototype.hasOwnProperty.call(REGISTERS, info.kind)) return { info, report: parseRegister(aoa, info) };
     return { info };
+  }
+
+  function mergeReports(parsed) {
+    const reports = new Map();
+    for (const { report } of parsed) {
+      if (!report) continue;
+      const key = [report.kind, report.period_start, report.period_end].join('|');
+      const existing = reports.get(key);
+      if (existing && JSON.stringify(existing) !== JSON.stringify(report)) {
+        throw new Error('Выбраны разные версии одного отчёта за этот период. Оставьте один файл.');
+      }
+      reports.set(key, report);
+    }
+    return [...reports.values()];
   }
 
   // Несколько файлов за раз: суммы — из взаиморасчётов (проведённые движения), подробности — из списков документов.
   // На выходе пачки с одинаковым набором полей: поля, которых нет в файле, на сервере не трогаются.
-  function merge(parsed) {
+  function prepareDocs(parsed) {
     const byKey = new Map();
+    const stats = new Map();
+    const statements = parsed.filter((p) => p.info.kind === 'vzaimo' && p.checkedTotal && !p.skipped && !p.info.filtered);
     for (const p of parsed) for (const r of p.rows) {
       const k = keyOf(r);
       if (!byKey.has(k)) byKey.set(k, {});
@@ -174,12 +271,23 @@
         }
         Object.assign(same.row, r);
         p.fields.forEach((f) => same.fields.add(f));
-      } else source[r.src] = { row: { ...r }, fields: new Set(p.fields) };
+      } else source[r.src] = { row: { ...r }, fields: new Set(p.fields), file: p };
     }
     const groups = new Map();
+    for (const p of parsed) if (p.info.kind === 'list') stats.set(p, { blank: 0, recovered: 0, unconfirmed: 0 });
     for (const { v, l } of byKey.values()) {
       if (v && l && (v.row.kontr !== l.row.kontr || v.row.at.slice(0, 10) !== l.row.at.slice(0, 10))) {
         throw new Error(`В выгрузках различаются поставщик или дата документа ${v.row.num}`);
+      }
+      if (l && (l.row.inc == null || l.row.dec == null)) {
+        stats.get(l.file)[v ? 'recovered' : 'blank']++;
+        if (!v) continue;
+      }
+      if (l && !v && statements.some((p) => p.info.from && p.info.from === l.file.info.from &&
+          p.info.to && p.info.to === l.file.info.to && p.scope.titles.includes(l.row.title) &&
+          l.row.at.slice(0, 10) >= p.info.from && l.row.at.slice(0, 10) <= p.info.to)) {
+        stats.get(l.file).unconfirmed++;
+        continue;
       }
       const row = l && v ? { ...l.row, inc: v.row.inc, dec: v.row.dec, src: 'v' } : (v || l).row;
       const fields = new Set([...(v?.fields || []), ...(l?.fields || [])]);
@@ -187,9 +295,10 @@
       if (!groups.has(sig)) groups.set(sig, { fields: [...fields].sort(), rows: [] });
       groups.get(sig).rows.push(row);
     }
-    return [...groups.values()];
+    return { groups: [...groups.values()], stats };
   }
 
-  const api = { parse, detect, merge, docTitle, kindOf, keyOf, date, num };
+  const api = { parse, detect, prepareDocs, merge: (parsed) => prepareDocs(parsed).groups, mergeReports,
+    registers: REGISTERS, docTitle, kindOf, keyOf, date, num };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Doc1C = api;
 })(typeof window !== 'undefined' ? window : globalThis);

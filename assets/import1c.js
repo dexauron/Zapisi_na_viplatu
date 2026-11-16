@@ -4,19 +4,33 @@
 (function (root) {
   const clean = (v) => String(v ?? '').replace(/ /g, ' ').replace(/\s+/g, ' ').trim();
   const num = (v) => {
-    if (v == null || v === '') return null;
-    if (typeof v === 'number') return Math.round(v * 100) / 100;
+    if (typeof v === 'number' && Math.abs(v) < 0.005) return 0;
     const s = clean(v).replace(/\s/g, '').replace(',', '.');
-    const n = Number(s); return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+    const parts = s.match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
+    if (!parts) return null;
+    const [, sign, whole, fraction = ''] = parts;
+    const integer = Number(whole);
+    if (integer > 999999999999) return null;
+    const cents = integer * 100 + Number(fraction.slice(0, 2).padEnd(2, '0')) + (fraction[2] >= '5' ? 1 : 0);
+    return cents <= 99999999999999 ? (sign === '-' ? -cents : cents) / 100 : null;
   };
   const pad = (n) => String(n).padStart(2, '0');
   // «31.08.2026», «31.08.2026 9:35:07», дата Excel (число) или Date
   function date(v, withTime = false) {
     if (v == null || v === '') return null;
-    if (v instanceof Date) v = `${pad(v.getDate())}.${pad(v.getMonth() + 1)}.${v.getFullYear()} ${pad(v.getHours())}:${pad(v.getMinutes())}:${pad(v.getSeconds())}`;
-    if (typeof v === 'number') { const d = new Date(Math.round((v - 25569) * 864e5)); v = `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)}.${d.getUTCFullYear()}`; }
-    const m = clean(v).match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+    if (v instanceof Date) v = `${pad(v.getDate())}.${pad(v.getMonth() + 1)}.${String(v.getFullYear()).padStart(4, '0')} ${pad(v.getHours())}:${pad(v.getMinutes())}:${pad(v.getSeconds())}`;
+    if (typeof v === 'number') {
+      if (!Number.isFinite(v) || v < 1 || Math.floor(v) === 60) return null;
+      const d = new Date(Math.round((v - (v < 60 ? 25568 : 25569)) * 864e5));
+      v = `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)}.${d.getUTCFullYear()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+    }
+    const m = clean(v).match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
     if (!m) return null;
+    const [, day, month, year, hour = 0, minute = 0, second = 0] = m;
+    const check = new Date(0);
+    check.setUTCFullYear(+year, +month - 1, +day);
+    if (+year === 0 || check.getUTCMonth() !== +month - 1 || check.getUTCDate() !== +day ||
+        +hour > 23 || +minute > 59 || +second > 59) return null;
     const d = `${m[3]}-${pad(m[2])}-${pad(m[1])}`;
     return withTime ? `${d}T${pad(m[4] || 0)}:${m[5] || '00'}:${m[6] || '00'}` : d;
   }
@@ -75,11 +89,16 @@
     const title = info.object, inc = INC.has(title);
     const fields = ['inc', 'dec', ...['retail', 'in_no', 'pay_due', 'basis', 'article', 'cash', 'comment'].filter((k) => c[k] >= 0)];
     const rows = []; let skipped = 0;
-    for (const r of aoa.slice(info.head + 1)) {
+    for (let i = info.head + 1; i < aoa.length; i++) {
+      const r = aoa[i];
       const d = docTitle(r?.[0]);
-      if (!d) continue;
+      if (!d) {
+        if (clean(r?.[0]).startsWith(title + ' ') && /\sот\s/.test(clean(r[0]))) throw new Error(`Строка ${i + 1}: неверная дата или номер документа`);
+        continue;
+      }
       const kontr = clean(r[c.kontr]); const amount = num(r[c.amount]);
-      if (d.title !== title || !kontr || amount == null || amount < 0) { skipped++; continue; } // расход на нужды магазина, ККМ и т. п.
+      if (d.title !== title || !kontr || amount < 0) { skipped++; continue; } // расход на нужды магазина, ККМ и т. п.
+      if (amount == null) throw new Error(`Строка ${i + 1}: неверная сумма документа`);
       const row = { title: d.title, num: d.num, at: d.at, kontr, inc: inc ? amount : 0, dec: inc ? 0 : amount, src: 'l' };
       if (c.retail >= 0) row.retail = num(r[c.retail]);
       if (c.in_no >= 0) { const x = clean(r[c.in_no]); row.in_no = !x || /ручн/i.test(x) ? null : x; }
@@ -90,7 +109,7 @@
       if (c.comment >= 0) { const x = clean(r[c.comment]); row.comment = !x || /^Введен на основании/i.test(x) ? null : x; }
       rows.push(row);
     }
-    return { rows, fields, skipped, scope: scopeOf(rows, info, [title], false) };
+    return { rows, fields, skipped, scope: scopeOf(rows, info, [title], false, skipped) };
   }
 
   // Отчёт «Взаиморасчёты с контрагентами»: Контрагент → Договор → Период → Документ движения
@@ -98,25 +117,29 @@
     const head = (aoa[info.head] || []).map(clean);
     const ci = head.findIndex((h) => /Увеличение долга/i.test(h)), cd = head.findIndex((h) => /Уменьшение долга/i.test(h));
     const rows = []; let kontr = null, skipped = 0;
-    for (const r of aoa.slice(info.head + 1)) {
+    for (let i = info.head + 1; i < aoa.length; i++) {
+      const r = aoa[i];
       const a = clean(r?.[0]);
       if (!a || a === 'Итого' || /^Договор$|^Период|^Документ движения$/.test(a)) continue;
       if (/^\d{1,2}\.\d{1,2}\.\d{4}(\s+\d{1,2}:\d{2}(:\d{2})?)?$/.test(a)) continue; // строка периода
       const d = docTitle(a);
       if (d) {
-        const inc = num(r[ci]) || 0, dec = num(r[cd]) || 0;
+        const inc = clean(r[ci]) ? num(r[ci]) : 0, dec = clean(r[cd]) ? num(r[cd]) : 0;
+        if (inc == null || dec == null) throw new Error(`Строка ${i + 1}: неверная сумма движения`);
         if (!kontr || inc < 0 || dec < 0) { skipped++; continue; }
         rows.push({ title: d.title, num: d.num, at: d.at, kontr, inc, dec, src: 'v' });
-      } else if (/договор/i.test(a)) continue;
+      } else if (/\sот\s+\d{1,2}\.\d{1,2}\./.test(a)) throw new Error(`Строка ${i + 1}: неверная дата или номер документа`);
+      else if (/договор/i.test(a)) continue;
       else kontr = a;
     }
     const titles = [...new Set(rows.map((r) => r.title))];
-    return { rows, fields: ['inc', 'dec'], skipped, scope: scopeOf(rows, info, titles, true) };
+    return { rows, fields: ['inc', 'dec'], skipped, scope: scopeOf(rows, info, titles, true, skipped) };
   }
 
   // Период для поиска удалённых: только дни, которые есть в файле (выгрузка списка бывает обрезана
   // раньше конца периода из заголовка — тогда «пропавшие» за остальные дни не считаются удалёнными)
-  function scopeOf(rows, info, titles, byReps) {
+  function scopeOf(rows, info, titles, byReps, skipped) {
+    if (skipped) return { titles, from: null, to: null, by_reps: byReps };
     const ds = rows.map((r) => r.at.slice(0, 10)).sort();
     let from = ds[0] || null, to = ds[ds.length - 1] || null;
     const shift = (d, n) => { const x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
@@ -139,14 +162,27 @@
   // На выходе пачки с одинаковым набором полей: поля, которых нет в файле, на сервере не трогаются.
   function merge(parsed) {
     const byKey = new Map();
-    for (const p of parsed.filter((x) => x.info?.kind === 'vzaimo')) for (const r of p.rows) byKey.set(keyOf(r), { row: { ...r }, fields: new Set(p.fields), money: true });
-    for (const p of parsed.filter((x) => x.info?.kind === 'list')) for (const r of p.rows) {
-      const k = keyOf(r), cur = byKey.get(k);
-      if (cur) { const { inc, dec } = cur.row; Object.assign(cur.row, r, { inc, dec, src: 'v' }); p.fields.forEach((f) => cur.fields.add(f)); }
-      else byKey.set(k, { row: { ...r }, fields: new Set(p.fields) });
+    for (const p of parsed) for (const r of p.rows) {
+      const k = keyOf(r);
+      if (!byKey.has(k)) byKey.set(k, {});
+      const source = byKey.get(k);
+      const same = source[r.src];
+      if (same) {
+        if (same.row.kontr !== r.kontr || same.row.at !== r.at ||
+            p.fields.some((f) => same.fields.has(f) && same.row[f] !== r[f])) {
+          throw new Error(`${p.name || 'Выгрузка 1С'}: разные сведения по документу ${r.num} от ${r.at.slice(0, 10)}`);
+        }
+        Object.assign(same.row, r);
+        p.fields.forEach((f) => same.fields.add(f));
+      } else source[r.src] = { row: { ...r }, fields: new Set(p.fields) };
     }
     const groups = new Map();
-    for (const { row, fields } of byKey.values()) {
+    for (const { v, l } of byKey.values()) {
+      if (v && l && (v.row.kontr !== l.row.kontr || v.row.at.slice(0, 10) !== l.row.at.slice(0, 10))) {
+        throw new Error(`В выгрузках различаются поставщик или дата документа ${v.row.num}`);
+      }
+      const row = l && v ? { ...l.row, inc: v.row.inc, dec: v.row.dec, src: 'v' } : (v || l).row;
+      const fields = new Set([...(v?.fields || []), ...(l?.fields || [])]);
       const sig = [...fields].sort().join(',');
       if (!groups.has(sig)) groups.set(sig, { fields: [...fields].sort(), rows: [] });
       groups.get(sig).rows.push(row);

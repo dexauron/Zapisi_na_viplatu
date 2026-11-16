@@ -158,6 +158,16 @@ begin
   perform public.reconcile(array(select jsonb_array_elements_text((j::jsonb) -> 'reps')::uuid));
   select open_amount::text into v from public.docs where num = 'ПФ1';
   log := log || pg_temp.chk('43 open = invoice - linked payment', v, '600.00');
+  j := public.finish_import('00000000-0000-0000-0000-0000000000d1',
+    '[{"titles":["Приходная накладная"],"from":"2026-09-01","to":"2026-09-01"}]'::jsonb);
+  select deleted::text into v from public.docs where num = 'ПФ1';
+  log := log || pg_temp.chk('43a repeated finish preserves invoice', (j ->> 'deleted') || '/' || v, '0/false');
+  perform pg_temp.reset_src();
+  j := public.import_docs('00000000-0000-0000-0000-0000000000d3', array['basis'],
+    '[{"title":"Расходный кассовый ордер","num":"ПФ2","at":"2026-09-02T10:00:00","kontr":"Поставщик Тест",
+       "basis":null}]'::jsonb);
+  j := public.finish_import('00000000-0000-0000-0000-0000000000d3', '[]'::jsonb);
+  log := log || pg_temp.chk('43b removed basis clears link', (select basis_id::text from public.docs where num = 'ПФ2'), null);
   perform set_config('request.jwt.claims', json_build_object('sub', emp, 'role', 'authenticated')::text, true);
   select count(*) into n from public.docs;
   log := log || pg_temp.chk('44 employee sees no docs', n::text, '0');
@@ -231,6 +241,15 @@ begin
   log := log || pg_temp.chk('61 stats: pay count', public.docs_stats('2026-09-01', '2026-09-30') -> 'pay' ->> 'n', n::text);
   insert into public.payouts (rep_id, amount, status, doc_id)
   select d.rep_id, 5, 'to_pay', d.id from public.docs d where d.num = 'ПФ1' returning id into pid2;
+  begin
+    insert into public.payouts (rep_id, amount, doc_id)
+    select d.rep_id, 5, d.id from public.docs d where d.num = 'ПФ1';
+    log := log || '61a FAIL duplicate invoice payout'::text;
+  exception when unique_violation then log := log || '61a duplicate invoice payout blocked ok'::text; end;
+  begin
+    update public.payouts set rep_id = rep2 where id = pid2;
+    log := log || '61b FAIL payout still linked to other supplier'::text;
+  exception when check_violation then log := log || '61b payout link checks supplier ok'::text; end;
   j := public.delete_docs('2026-09-01', '2026-09-30', array['pay']);
   select (select count(*) from public.docs where kind = 'pay' and doc_at >= '2026-09-01' and doc_at < '2026-10-01')::text || '/'
       || (select count(*) from public.docs where num = 'ПФ1')::text into v;
@@ -253,6 +272,16 @@ begin
   j := public.get_rep_data(tok);
   perform set_config('role', 'authenticated', true);
   log := log || pg_temp.chk('67 rep cabinet shows store name', j ->> 'shop', 'Магазин Тест');
+
+  perform pg_temp.reset_src();
+  j := public.import_docs(gen_random_uuid(), array['inc', 'in_no'],
+    '[{"title":"Приходная накладная","num":"TEST-A","at":"2026-09-03T10:00:00","kontr":"Поставщик Тест","inc":1000,"in_no":"TEST-A"}]'::jsonb);
+  insert into public.payouts (rep_id, amount, invoice_no)
+  select d.rep_id, amounts.amount, 'TEST-A'
+    from public.docs d cross join (values (5), (6)) amounts(amount) where d.num = 'TEST-A';
+  perform public.reconcile(array(select d.rep_id from public.docs d where d.num = 'TEST-A'));
+  select count(*) into n from public.payouts where invoice_no = 'TEST-A' and doc_id is not null;
+  log := log || pg_temp.chk('68 ambiguous invoice not linked automatically', n::text, '0');
 
   raise exception E'РЕЗУЛЬТАТ\n%', array_to_string(log, E'\n');
 end

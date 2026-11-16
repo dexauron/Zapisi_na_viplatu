@@ -1,27 +1,48 @@
-// Офлайн-оболочка и быстрый старт.
-// Файлы с ?v=<версия> не меняются — берём из кэша сразу (cache-first).
-// Страницы — из сети, но если сеть не ответила за 2,5 с или её нет — из кэша.
-// Данные (Supabase) сюда не попадают: их хранит само приложение (кэш + очередь изменений).
-const CACHE = 'sverka-shell-v2';
+// Кэш оболочки «Сверки» для работы без сети. Данные Supabase здесь не сохраняются.
+const CACHE = 'sverka-shell-v3';
+const PREVIOUS = 'sverka-shell-v2';
+const SCOPE = new URL(self.registration.scope);
+const PAGES = new Set(['', 'app.html', 'index.html', 'list.html', 'admin.html']);
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', (e) => e.waitUntil(
-  caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())));
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
-const put = (req, res) => { if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); } return res; };
-
-self.addEventListener('fetch', (e) => {
-  const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
-  if (url.searchParams.has('v')) {
-    e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => put(e.request, res))));
-    return;
+async function cached(cache, request, options) {
+  try {
+    return await cache?.match(request, options) || await caches.match(request, { ...options, cacheName: PREVIOUS });
+  } catch { return undefined; }
+}
+async function fromNetwork(cache, request) {
+  const response = await fetch(request);
+  if (response.ok && cache) {
+    try { await cache.put(request, response.clone()); } catch { /* кэш может быть недоступен */ }
   }
-  e.respondWith(new Promise((resolve) => {
-    let done = false;
-    const fromCache = () => caches.match(e.request, { ignoreSearch: true })
-      .then((r) => r || caches.match('app.html', { ignoreSearch: true }));
-    const timer = setTimeout(() => fromCache().then((r) => { if (r && !done) { done = true; resolve(r); } }), 2500);
-    fetch(e.request).then((res) => { put(e.request, res); if (!done) { done = true; clearTimeout(timer); resolve(res); } })
-      .catch(() => fromCache().then((r) => { if (!done) { done = true; clearTimeout(timer); resolve(r || Response.error()); } }));
-  }));
+  return response;
+}
+
+self.addEventListener('fetch', (event) => {
+  const request = event.request, url = new URL(request.url);
+  if (request.method !== 'GET' || request.cache === 'no-store' || url.origin !== SCOPE.origin || !url.pathname.startsWith(SCOPE.pathname)) return;
+  const path = url.pathname.slice(SCOPE.pathname.length);
+  const navigation = request.mode === 'navigate';
+  if (navigation ? !PAGES.has(path) : !/^(assets\/|vendor\/|manifest\.webmanifest$)/.test(path)) return;
+
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE).catch(() => null);
+    if (!navigation && url.searchParams.has('v')) {
+      return await cached(cache, request) || fromNetwork(cache, request);
+    }
+
+    const options = navigation ? { ignoreSearch: true } : undefined;
+    const fallback = () => cached(cache, request, options);
+    const network = fromNetwork(cache, request);
+    if (!navigation) return network.catch(async () => await fallback() || Response.error());
+
+    let timer;
+    const slow = new Promise((resolve) => {
+      timer = setTimeout(async () => resolve(await fallback() || response), 2500);
+    });
+    const response = network.catch(async () => await fallback() || Response.error());
+    try { return await Promise.race([response, slow]); }
+    finally { clearTimeout(timer); }
+  })());
 });

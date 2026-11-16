@@ -27,7 +27,10 @@
     <label class="field"><span>Пароль</span><input id="l-pass" type="password" autocomplete="current-password" placeholder="обязательно" required></label>
   </div>
   <button class="btn blue" type="submit">Войти</button>
+  <p class="footer-note" id="login-progress" role="status" hidden></p>
+  <p class="footer-note" id="login-error" role="alert" hidden></p>
   <p class="footer-note" style="text-align:center;margin-top:14px">Учётную запись выдаёт администратор</p>
+  <button class="btn plain" id="login-check" type="button">Проверить связь</button>
 </form>
 
 <!-- Приложение -->
@@ -40,7 +43,26 @@
 <main class="page hidden" id="page"></main>
 <nav class="tabbar hidden" id="tabbar"><div class="tabbar-inner" id="tabs"></div></nav>
 <div class="spinner" id="boot"></div>
+<div class="login" id="boot-error" hidden>
+  <h1>Не удалось загрузить «Сверку»</h1>
+  <p>Проверьте подключение к интернету и обновите страницу.</p>
+  <a href="app.html">Обновить страницу</a>
+</div>
 
+<script>
+  (() => {
+    function showStartupError() {
+      if (!document.getElementById('login').classList.contains('hidden') ||
+          !document.getElementById('nav').classList.contains('hidden')) return;
+      document.getElementById('boot').classList.add('hidden');
+      document.getElementById('boot-error').hidden = false;
+    }
+    window.addEventListener('error', (event) => {
+      if (event.target?.tagName === 'SCRIPT' || event.filename) showStartupError();
+    }, true);
+    setTimeout(showStartupError, 25000);
+  })();
+</script>
 <script src="vendor/supabase.js"></script>
 <script src="assets/config.js"></script>
 <script src="assets/common.js"></script>

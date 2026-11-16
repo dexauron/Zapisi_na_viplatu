@@ -37,7 +37,12 @@
     if (/expected_date/i.test(m)) return 'Дата прихода раньше даты заказа';
     return m;
   }
-  const parseAmount = (v) => { const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.')); return Number.isFinite(n) ? Math.round(n * 100) / 100 : NaN; };
+  const parseAmount = (v) => {
+    const value = String(v).trim().replace(/[ \u00a0\u202f]/g, '').replace(',', '.');
+    if (!/^\d+(?:\.\d{1,2})?$/.test(value)) return NaN;
+    const amount = Number(value);
+    return amount <= 9999999999.99 ? amount : NaN;
+  };
   const repById = (id) => st.reps.find((r) => r.id === id);
   const storeById = (id) => st.stores.find((s) => s.id === id);
   const coKey = (c) => String(c || '').toLowerCase().replace(/ё/g, 'е').replace(/[\s.,«»"']+/g, '');
@@ -53,70 +58,141 @@
   async function confirmAct(text) { return window.confirm(text); }
 
   // ---------- вход ----------
+  const invalidCredentials = (e) => e?.code === 'invalid_credentials' || /Invalid login/i.test(e?.message);
+  const notFound = (e, status) => status === 404 || e?.status === 404 || /\b404\b|^not found\b/i.test(e?.message);
+  function signInError(e) {
+    if (invalidCredentials(e)) return 'Неверный логин или пароль';
+    if (e?.code === 'user_banned' || /banned/i.test(e?.message)) return 'Учётная запись отключена';
+    if (notFound(e)) return 'Сервер входа вернул ошибку 404. Сообщите администратору.';
+    if (isNetErr(e)) return 'Нет связи с сервером входа. Проверьте подключение и повторите попытку.';
+    if (e?.name === 'AuthUnknownError') return 'Сервер входа вернул неожиданный ответ. Сообщите администратору.';
+    const status = Number.isInteger(e?.status) ? ` (HTTP ${e.status})` : '';
+    return `Не удалось войти${status}. Повторите попытку или обратитесь к администратору.`;
+  }
+  function setLoginError(message) {
+    const notice = $('login-error');
+    notice.textContent = message;
+    notice.hidden = !message;
+  }
+  function setLoginProgress(message) {
+    const notice = $('login-progress');
+    notice.textContent = message;
+    notice.hidden = !message;
+  }
   $('login').addEventListener('submit', async (e) => {
     e.preventDefault();
     const u = $('l-user').value.trim().toLowerCase();
     const email = u.includes('@') ? u : `${u}@${STAFF_DOMAIN}`;
-    const b = e.target.querySelector('button'); b.disabled = true;
-    let { error } = await sb.auth.signInWithPassword({ email, password: $('l-pass').value });
-    // логин представителя: его кабинет — на главной странице, там только его данные
-    if (error && /Invalid login/i.test(error.message) && !u.includes('@')) {
-      const r2 = await sb.auth.signInWithPassword({ email: `${u}@${REP_DOMAIN}`, password: $('l-pass').value });
-      if (!r2.error) return location.replace('index.html');
+    const b = e.target.querySelector('button');
+    if (b.disabled) return;
+    b.disabled = true;
+    setLoginError('');
+    setLoginProgress('Проверяем логин и пароль…');
+    const password = $('l-pass').value;
+    try {
+      let { error } = await sb.auth.signInWithPassword({ email, password });
+      // Логин представителя открывает его кабинет на главной странице.
+      if (error && invalidCredentials(error) && !u.includes('@')) {
+        ({ error } = await sb.auth.signInWithPassword({ email: `${u}@${REP_DOMAIN}`, password }));
+        if (!error) return location.replace('index.html');
+      }
+      if (error) return setLoginError(signInError(error));
+      $('l-pass').value = '';
+      setLoginProgress('Загружаем рабочие данные…');
+      await boot();
+    } catch (error) {
+      setLoginError(signInError(error));
+    } finally {
+      b.disabled = false;
+      setLoginProgress('');
     }
-    b.disabled = false;
-    if (fail(error)) return;
-    try { localStorage.removeItem('sverka-cache'); } catch { /* */ }
-    boot();
   });
 
-  const withTimeout = (pr, ms) => Promise.race([pr, new Promise((_, no) => setTimeout(() => no(new Error('network timeout')), ms))]);
+  function withTimeout(promise, ms) {
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('network timeout')), ms); });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
   async function boot() {
     $('boot').classList.remove('hidden');
-    // Мгновенный старт: показываем сохранённые данные, свежие подгружаются фоном
-    if (hasSavedSession() && cacheLoad() && st.me) {
-      applyQueue(); showApp();
-      if (navigator.onLine) refresh(true, false, true);
-      return;
+    const remembered = storedAccount();
+    useAccount(remembered);
+    if (!navigator.onLine) {
+      if (cacheLoad()) { applyQueue(); showApp(); return; }
+      return showLogin('Нет сети. Подключитесь к интернету, чтобы войти.');
     }
-    // Первый запуск на этом устройстве
-    let session = null;
-    try { ({ data: { session } } = await withTimeout(sb.auth.getSession(), 6000)); } catch { session = null; }
-    if (!session) return showLogin();
-    if (!(await loadAll())) return;
-    lastLoad = Date.now();
-    showApp();
+
+    let session, sessionError;
+    try {
+      const result = await withTimeout(sb.auth.getSession(), 6000);
+      session = result.data.session;
+      sessionError = result.error;
+    } catch (error) { sessionError = error; }
+    if (!session) {
+      if (sessionError && remembered === storedAccount() && isNetErr(sessionError) && cacheLoad()) {
+        applyQueue(); showApp(); return;
+      }
+      useAccount(null);
+      return showLogin(sessionError ? signInError(sessionError) : '');
+    }
+    try {
+      useAccount(session.user.id);
+      if (!(await loadAll())) return;
+      lastLoad = Date.now();
+      showApp();
+      if (queue.length && navigator.onLine) refresh(true);
+    } catch {
+      showLogin('Не удалось открыть «Сверку». Обновите страницу и повторите попытку.');
+    }
   }
-  function hasSavedSession() { try { return Object.keys(localStorage).some((k) => /^sb-.*-auth-token$/.test(k)); } catch { return false; } }
+  function storedAccount() {
+    try { return JSON.parse(localStorage.getItem(sb.auth.storageKey))?.user?.id || null; } catch { return null; }
+  }
   function showApp() {
     if (!isAdmin() && (st.tab === 'payouts' || st.tab === 'sum')) st.tab = 'today';
+    $('boot-error').hidden = true;
     $('boot').classList.add('hidden');
     ['nav', 'page', 'tabbar'].forEach((id) => $(id).classList.remove('hidden'));
     document.body.classList.add('app-on');
     $('login').classList.add('hidden');
     renderTabs(); render(); offlineBar();
   }
-  function showLogin() {
+  function showLogin(message = '') {
+    $('boot-error').hidden = true;
     $('boot').classList.add('hidden');
     ['nav', 'page', 'tabbar'].forEach((id) => $(id).classList.add('hidden'));
     document.body.classList.remove('app-on');
+    setLoginError(message);
     $('login').classList.remove('hidden');
   }
 
   // Все данные одним запросом (RPC app_bootstrap). true — данные есть (с сервера или из кэша)
   async function loadAll() {
+    const owner = accountId;
+    if (!owner) return false;
     if (!navigator.onLine && cacheLoad()) { applyQueue(); offlineBar(); return true; }
-    if (queue.length) await flush();
+    if (st.me && navigator.onLine) await flush();
+    if (owner !== accountId) return false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
     let r;
-    try { r = await sb.rpc('app_bootstrap'); } catch (e) { r = { error: e }; }
+    try { r = await sb.rpc('app_bootstrap').abortSignal(controller.signal); }
+    catch (e) { r = { error: e }; }
+    finally { clearTimeout(timer); }
+    if (owner !== accountId) return false;
     if (r.error) {
       if (isNetErr(r.error) && cacheLoad()) { applyQueue(); offlineBar(); return true; }
-      if (/JWT|token|401|PGRST30/i.test(r.error.message + (r.error.code || ''))) { await signOutClean('Сессия истекла — войдите снова'); return false; }
+      if (r.status === 401 || ['PGRST301', 'PGRST302', 'PGRST303'].includes(r.error.code)) { await signOutClean('Сессия истекла — войдите снова'); return false; }
+      if (!st.me) {
+        const details = notFound(r.error, r.status) ? ' (HTTP 404)' : '';
+        showLogin(`Вход выполнен, но сервер не загрузил рабочие данные${details}. Обновите страницу, чтобы повторить загрузку.`);
+        return false;
+      }
       fail(r.error); return !!st.me;
     }
     const d = r.data || {};
-    if (!d.me || !d.me.active) {
-      const { data: { session } } = await sb.auth.getSession();
+    if (d.me?.user_id !== owner || !d.me.active) {
+      const { data: { session } } = await withTimeout(sb.auth.getSession(), 6000);
       if (!d.me && session?.user?.email?.endsWith('@' + REP_DOMAIN)) { location.replace('index.html'); return false; }
       await signOutClean('Нет доступа: учётная запись не активна'); return false;
     }
@@ -130,8 +206,9 @@
   }
   async function signOutClean(msg) {
     try { localStorage.removeItem(CKEY); } catch { /* */ }
-    st.me = null; await sb.auth.signOut().catch(() => {});
-    A.toast(msg, true); showLogin();
+    useAccount(null);
+    await sb.auth.signOut({ scope: 'local' }).catch(() => {});
+    showLogin(msg);
   }
   const ordView = (o) => A.orderView({ status: o.status, expected: o.expected_date });
 
@@ -471,7 +548,7 @@
     async function save(api) {
       const v = (n) => f.querySelector(`[name=${n}]`).value.trim();
       const amount = parseAmount(v('amount'));
-      if (!(amount > 0)) return A.toast('Укажите сумму больше нуля', true);
+      if (!(amount > 0)) return A.toast('Укажите положительную сумму с точностью до копеек', true);
       if (v('expected_date') && v('expected_date') < v('order_date')) return A.toast('Дата прихода раньше даты заказа', true);
       api.busy(true);
       try {
@@ -671,6 +748,9 @@
         amountIn.value = String(sel.reduce((a, d) => a + A.toCents(d.open_amount), 0) / 100).replace('.', ',');
         noIn.value = sel.map((d) => d.in_no || 'б/н').join(', ');
         if (sel.length === 1 && !sel[0].in_no) noIn.value = '';
+      } else {
+        amountIn.value = '';
+        noIn.value = '';
       }
       amountIn.readOnly = multi; noIn.readOnly = multi;
       amountIn.closest('.field').classList.toggle('ro', multi); noIn.closest('.field').classList.toggle('ro', multi);
@@ -726,7 +806,8 @@
     async function save(api) {
       const v = (n) => f.querySelector(`[name=${n}]`).value.trim();
       const amount = parseAmount(v('amount'));
-      if (!(amount > 0)) return A.toast('Укажите сумму больше нуля', true);
+      if (!(amount > 0)) return A.toast('Укажите положительную сумму с точностью до копеек', true);
+      if (!v('payout_date')) return A.toast('Укажите дату выплаты', true);
       api.busy(true);
       try {
         const pk = await resolvePickers(f);
@@ -751,7 +832,7 @@
           preset.after?.();
           return;
         }
-        const row = { ...pk, amount, invoice_no: v('invoice_no') || null, ...(v('doc_id') ? { doc_id: v('doc_id') } : {}), payout_date: v('payout_date'), status: v('status'), basis: v('basis') || null, comment: v('comment') || null };
+        const row = { ...pk, amount, invoice_no: v('invoice_no') || null, doc_id: v('doc_id') || null, payout_date: v('payout_date'), status: v('status'), basis: v('basis') || null, comment: v('comment') || null };
         const r = await write('payouts', p ? 'update' : 'insert', p?.id, row);
         st.payouts.sort((a, b) => b.payout_date.localeCompare(a.payout_date));
         api.close(); A.toast('Сохранено' + (r.offline ? ' · отправится при появлении сети' : '')); render();
@@ -1198,9 +1279,11 @@
     $('theme').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) { A.haptic(); A.setTheme(k); renderMore(); } });
     $('fz').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) { A.haptic(); A.setFz(k); renderMore(); } });
     $('logout').addEventListener('click', async () => {
-      if (queue.length && !(await confirmAct(`Не отправлено изменений: ${queue.length}. При выходе они пропадут. Выйти?`))) return;
-      queue = []; saveQueue(); try { localStorage.removeItem(CKEY); } catch { /* */ }
-      await sb.auth.signOut(); st.me = null; showLogin(); });
+      const { error } = await sb.auth.signOut({ scope: 'local' });
+      if (fail(error)) return;
+      try { localStorage.removeItem(CKEY); } catch { /* */ }
+      useAccount(null); showLogin();
+    });
   }
 
 
@@ -1210,19 +1293,72 @@
   const QKEY = 'sverka-queue', CKEY = 'sverka-cache';
   // crypto.randomUUID нет в старых iOS/Android — запасной вариант на getRandomValues
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))).toString(16)));
-  const isNetErr = (e) => !navigator.onLine || /Failed to fetch|NetworkError|Load failed|network|fetch/i.test(e?.message || String(e || ''));
-  let queue = []; try { queue = JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch { queue = []; }
-  const saveQueue = () => { try { localStorage.setItem(QKEY, JSON.stringify(queue)); } catch { /* переполнено */ } offlineBar(); };
+  const isNetErr = (e) => !navigator.onLine || e?.status === 0 || e?.name === 'AbortError' ||
+    /Failed to fetch|NetworkError|Load failed|network|fetch|AbortError|aborted/i.test(e?.message || String(e || ''));
+  let accountId = null, queue = [], queueBlocked = false, queueWork = Promise.resolve();
+  const queueKey = (owner) => `${QKEY}:${sb.auth.storageKey}:${owner}`;
+  function readQueue(key) {
+    try {
+      const items = JSON.parse(localStorage.getItem(key) || 'null');
+      return Array.isArray(items) ? items : null;
+    } catch { return null; }
+  }
+  function useAccount(owner) {
+    if (owner === accountId) return;
+    if (accountId) {
+      A.dismissOverlays();
+      $('page').textContent = '';
+      for (const pending of pendingDeletes.values()) clearTimeout(pending.timer);
+      pendingDeletes.clear();
+      st.tab = 'today';
+      st.one = { stats: null, rows: null, view: 'reps', flt: 'all', limit: 150, seq: st.one.seq + 1 };
+    }
+    accountId = owner; st.me = null; queue = []; queueBlocked = false;
+    if (!owner) return;
+    const key = queueKey(owner);
+    const saved = readQueue(key);
+    if (saved) { queue = saved; return; }
+    // Старая очередь переносится только при совпадении сохранённой учётной записи.
+    try {
+      const cache = JSON.parse(localStorage.getItem(CKEY) || 'null');
+      const legacy = readQueue(QKEY);
+      if (cacheMatches(cache) && legacy?.length) {
+        localStorage.setItem(key, JSON.stringify(legacy));
+        queue = legacy;
+        localStorage.removeItem(QKEY);
+      }
+    } catch { /* исходная очередь остаётся доступной после освобождения места */ }
+  }
+  function saveQueue(items, owner) {
+    try { localStorage.setItem(queueKey(owner), JSON.stringify(items)); }
+    catch { throw new Error('Не удалось сохранить очередь на устройстве. Освободите место и повторите действие.'); }
+    if (owner === accountId) { queue = items; offlineBar(); }
+  }
+  function withQueue(owner, run) {
+    const work = () => navigator.locks ? navigator.locks.request(queueKey(owner), run) : run();
+    const next = queueWork.then(work);
+    queueWork = next.catch(() => {});
+    return next;
+  }
   const listOf = (table) => (table === 'orders' ? st.orders : st.payouts);
+  const cacheMatches = (cache) => accountId && cache?.me?.user_id === accountId &&
+    (!cache.project || cache.project === sb.auth.storageKey);
 
-  async function send(w) {
+  async function send(w, owner) {
+    const { data: { session }, error: sessionError } = await sb.auth.getSession();
+    if (sessionError) throw sessionError;
+    if (session?.user.id !== owner || owner !== accountId) throw new Error('Сессия изменилась. Войдите в ту же учётную запись.');
+    const bearer = `Bearer ${session.access_token}`;
     let q;
     if (w.op === 'insert') q = sb.from(w.table).insert({ ...w.row, id: w.id }).select().single();
     else if (w.op === 'update') q = sb.from(w.table).update(w.row).eq('id', w.id).select().single();
     else q = sb.from(w.table).delete().eq('id', w.id);
-    const { data, error } = await q;
-    if (error && w.op === 'insert' && error.code === '23505') return (await sb.from(w.table).select('*').eq('id', w.id).single()).data; // уже записано раньше
-    if (error && w.op === 'update' && error.code === 'PGRST116') return null; // запись удалили
+    const { data, error } = await q.setHeader('Authorization', bearer);
+    if (error && w.op === 'insert' && error.code === '23505') {
+      const existing = await sb.from(w.table).select('*').eq('id', w.id).single().setHeader('Authorization', bearer);
+      if (existing.data) return existing.data; // тот же запрос уже сохранён
+    }
+    if (error && w.op === 'update' && error.code === 'PGRST116') throw new Error('Запись больше недоступна. Обновите список.');
     if (error) throw error;
     return data;
   }
@@ -1239,49 +1375,80 @@
     if (w.row.status === 'delivered' && !row.delivered_at) row.delivered_at = new Date().toISOString();
     if (w.row.status && w.row.status !== 'delivered') row.delivered_at = null;
     if (w.row.status === 'paid' && !row.paid_at) row.paid_at = new Date().toISOString();
-    if (w.table === 'payouts' && w.row.status && w.row.status !== 'paid') row.paid_at = null;
+    if (w.table === 'payouts' && w.row.status && w.row.status !== 'paid') { row.paid_at = null; row.received_at = null; }
     row._pending = pending;
+  }
+  function applyServerWrite(w, data) {
+    if (!data) { applyLocal(w, false); return; }
+    const list = listOf(w.table);
+    const row = list.find((x) => x.id === w.id);
+    if (row) { Object.assign(row, data); delete row._pending; }
+    else list.unshift(data);
   }
   // Записать: сразу на сервер; без сети — в очередь, отправится сама
   async function write(table, op, id, row = {}) {
+    const owner = accountId;
+    if (!owner) throw new Error('Войдите в учётную запись');
     const w = { table, op, id: id || uuid(), row };
-    if (queue.length) await flush();
-    if (!queue.length) {
-      try {
-        const data = await send(w);
-        if (data) { const list = listOf(table); const r = list.find((x) => x.id === w.id); if (r) { Object.assign(r, data); delete r._pending; } else list.unshift(data); }
-        else applyLocal(w, false);
-        cacheSave();
-        return { id: w.id, offline: false };
-      } catch (e) { if (!isNetErr(e)) throw e; }
-    }
-    queue.push(w); saveQueue(); applyLocal(w, true); cacheSave();
-    return { id: w.id, offline: true };
-  }
-  let flushing = null;
-  function flush() {
-    if (flushing) return flushing;
-    flushing = (async () => {
-      let sent = 0;
-      while (queue.length) {
-        try { await send(queue[0]); queue.shift(); sent++; saveQueue(); }
-        catch (e) {
-          if (isNetErr(e)) break;
-          A.toast('Не удалось отправить изменение: ' + humanError(e), true); queue.shift(); saveQueue();
-        }
+    return withQueue(owner, async () => {
+      if (owner !== accountId) throw new Error('Сессия изменилась. Войдите в ту же учётную запись.');
+      await flushQueue(owner);
+      if (owner !== accountId) throw new Error('Сессия изменилась. Войдите в ту же учётную запись.');
+      if (!queue.length && navigator.onLine) {
+        try {
+          const data = await send(w, owner);
+          if (owner === accountId) {
+            applyServerWrite(w, data);
+            cacheSave();
+          }
+          return { id: w.id, offline: false };
+        } catch (e) { if (!isNetErr(e)) throw e; }
       }
-      if (sent) A.toast(`Отправлено изменений: ${sent}`);
-      return sent;
-    })().finally(() => { flushing = null; });
-    return flushing;
+      if (queueBlocked || owner !== accountId) throw new Error('Очередь изменений не отправлена. Проверьте связь и обновите список.');
+      saveQueue([...queue, w], owner);
+      applyLocal(w, true); cacheSave();
+      return { id: w.id, offline: true };
+    });
+  }
+  function flush() {
+    const owner = accountId;
+    return owner ? withQueue(owner, () => flushQueue(owner)) : Promise.resolve(0);
+  }
+  async function flushQueue(owner) {
+    if (owner !== accountId) return 0;
+    queue = readQueue(queueKey(owner)) || queue;
+    let sent = 0;
+    while (queue.length && navigator.onLine && owner === accountId) {
+      const items = queue;
+      try {
+        const data = await send(items[0], owner);
+        saveQueue(items.slice(1), owner);
+        if (owner === accountId) { applyServerWrite(items[0], data); cacheSave(); queueBlocked = false; }
+        sent++;
+      }
+      catch (e) {
+        if (owner === accountId && !isNetErr(e) && !queueBlocked) {
+          queueBlocked = true;
+          A.toast('Не удалось отправить изменение: ' + humanError(e), true);
+        }
+        break;
+      }
+    }
+    if (sent && owner === accountId) A.toast(`Отправлено изменений: ${sent}`);
+    return sent;
   }
   function applyQueue() { for (const w of queue) applyLocal(w, true); }
   function cacheSave() {
-    try { localStorage.setItem(CKEY, JSON.stringify({ me: st.me, reps: st.reps, stores: st.stores, orders: st.orders, payouts: st.payouts, access: st.access, repUsers: st.repUsers, staff: st.staff, unrec: st.unrec, open1c: st.open1c, dbMb: st.dbMb })); }
+    if (!accountId || st.me?.user_id !== accountId) return;
+    try { localStorage.setItem(CKEY, JSON.stringify({ project: sb.auth.storageKey, me: st.me, reps: st.reps, stores: st.stores, orders: st.orders, payouts: st.payouts, access: st.access, repUsers: st.repUsers, staff: st.staff, unrec: st.unrec, open1c: st.open1c, dbMb: st.dbMb })); }
     catch { /* мало места — без кэша */ }
   }
   function cacheLoad() {
-    try { const c = JSON.parse(localStorage.getItem(CKEY) || 'null'); if (!c) return false; Object.assign(st, c); return true; } catch { return false; }
+    try {
+      const c = JSON.parse(localStorage.getItem(CKEY) || 'null');
+      if (!cacheMatches(c)) return false;
+      Object.assign(st, c); return true;
+    } catch { return false; }
   }
   // Полоска «нет сети»
   function offlineBar() {
@@ -1289,10 +1456,10 @@
     if (!bar) { bar = document.createElement('div'); bar.id = 'offline'; bar.className = 'offline-bar'; document.body.append(bar); }
     const off = !navigator.onLine, n = queue.length;
     bar.textContent = off ? (n ? `Нет сети · не отправлено: ${n}. Отправится само` : 'Нет сети · показаны сохранённые данные')
-      : n ? `Отправка изменений: ${n}…` : '';
+      : n ? (queueBlocked ? `Не удалось отправить изменений: ${n}` : `Ожидают отправки: ${n}`) : '';
     bar.classList.toggle('show', !!(st.me && (off || n)));
   }
-  window.addEventListener('online', async () => { offlineBar(); if (await flush()) { await loadAll(); render(); } offlineBar(); });
+  window.addEventListener('online', async () => { offlineBar(); await refresh(true); offlineBar(); });
   window.addEventListener('offline', offlineBar);
 
   // Смена статуса с кнопкой «Вернуть»
@@ -1320,17 +1487,22 @@
     } });
   }
   async function commitDelete(table, id, row, i) {
+    const owner = accountId;
     pendingDeletes.delete(id);
     try { await write(table, 'delete', id); }
-    catch (e) { listOf(table).splice(Math.min(i, listOf(table).length), 0, row); rerender(); A.toast(humanError(e), true); }
+    catch (e) {
+      if (owner !== accountId) return;
+      const list = listOf(table);
+      if (!list.some((item) => item.id === id)) list.splice(Math.min(i, list.length), 0, row);
+      rerender(); A.toast(humanError(e), true);
+    }
   }
   // Закрыли вкладку раньше 5 секунд — удаление всё равно выполняется
   window.addEventListener('pagehide', () => { for (const [id, p] of pendingDeletes) { clearTimeout(p.timer); commitDelete(p.table, id, p.row, p.i); } });
   function rerender() { if (!st.me) return; (render.body || render)(); renderTabs(); }
 
   // ---------- проверка связи ----------
-  // Сайт приходит с GitHub, данные — из Supabase через Cloudflare. Часть провайдеров РФ обрывает
-  // соединения с Cloudflare после ~16 КБ: маленькие запросы проходят, большие — нет. Проверка показывает это на месте.
+  $('login-check').addEventListener('click', netCheck);
   async function netCheck() {
     const api = A.sheet({ title: 'Проверка связи', left: 'Закрыть', body: '<div class="list" id="nc" style="margin-top:8px"></div><div class="footer-note" id="ncn"></div>' });
     const box = api.body.querySelector('#nc'), note = api.body.querySelector('#ncn'), rows = [];
@@ -1339,33 +1511,41 @@
     const kb = (n) => Math.max(1, Math.round(n / 1024)) + ' КБ', sec = (ms) => (ms / 1000).toFixed(1).replace('.', ',') + ' с';
     async function measure(url, opts = {}) {
       const t0 = performance.now(), ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 15000);
-      let got = 0;
+      let got = 0, status;
       try {
         const r = await fetch(url, { ...opts, signal: ctl.signal, cache: 'no-store' });
-        const rd = r.body.getReader();
-        for (;;) { const { done, value } = await rd.read(); if (done) break; got += value.length; }
-        return { ok: r.ok, got, ms: performance.now() - t0 };
-      } catch { return { ok: false, got, ms: performance.now() - t0 }; } finally { clearTimeout(to); }
+        status = r.status;
+        const rd = r.body?.getReader();
+        if (rd) for (;;) { const { done, value } = await rd.read(); if (done) break; got += value.length; }
+        return { ok: r.ok, status, got, ms: performance.now() - t0 };
+      } catch { return { ok: false, status, got, ms: performance.now() - t0, interrupted: true }; } finally { clearTimeout(to); }
     }
     // разовый сбой (например, сразу после включения/выключения VPN) — повторить один раз
     const measure2 = async (url, opts) => { const m = await measure(url, opts); if (m.ok) return m; const r = await measure(url, opts); r.retried = true; return r; };
-    const res = (m) => (m.ok ? `${kb(m.got)} за ${sec(m.ms)}${m.retried ? ' (со 2-й попытки)' : ''}` : m.got ? `оборвалось на ${kb(m.got)}` : `нет ответа (${sec(m.ms)})`);
+    const res = (m) => m.ok ? `HTTP ${m.status}, ${kb(m.got)} за ${sec(m.ms)}`
+      : m.status && !m.interrupted ? `HTTP ${m.status}` : m.got ? `Ответ оборвался на ${kb(m.got)}` : `Нет ответа (${sec(m.ms)})`;
     rows.push(row('Интернет', navigator.onLine ? 'есть' : 'нет', navigator.onLine));
     show(row('Сайт (GitHub)', 'проверяю…'));
-    const site = await measure2(new URL(`vendor/supabase.js?v=nc${Date.now()}`, location.href).href);
+    const site = await measure2(new URL('app.html', location.href).href);
     rows.push(row('Сайт (GitHub)', res(site), site.ok));
-    show(row('База: короткий ответ', 'проверяю…'));
+    show(row('Сервер входа', 'проверяю…'));
     const { SUPABASE_URL, SUPABASE_KEY } = window.APP_CONFIG;
     const small = await measure2(`${SUPABASE_URL}/auth/v1/health`, { headers: { apikey: SUPABASE_KEY } });
-    rows.push(row('База: короткий ответ', res(small), small.ok));
+    rows.push(row('Сервер входа', res(small), small.ok));
+    if (!st.me) {
+      show();
+      note.textContent = small.ok ? 'Сервер отвечает. Если войти не удаётся, сообщите администратору текст ошибки на форме входа.'
+        : 'Сервер входа недоступен. Передайте администратору результаты этой проверки.';
+      return;
+    }
     show(row('База: все данные', 'проверяю…'));
-    const token = (await sb.auth.getSession()).data.session?.access_token;
+    const session = await sb.auth.getSession().catch(() => null);
+    const token = session?.data.session?.access_token;
     const big = await measure2(`${SUPABASE_URL}/rest/v1/rpc/app_bootstrap`, { method: 'POST',
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token || SUPABASE_KEY}`, 'Content-Type': 'application/json' }, body: '{}' });
     rows.push(row('База: все данные', res(big), big.ok)); show();
-    note.textContent = big.ok ? (small.ok ? 'Связь в порядке: данные доходят полностью.' : 'Данные доходят полностью; короткий запрос не прошёл — разовый сбой сети.')
-      : small.ok ? 'Короткие ответы проходят, большие обрываются: провайдер ограничивает Cloudflare, через который работает база. Сообщите — подключу обходной путь.'
-      : site.ok ? 'Сайт открывается, а база не отвечает: провайдер ограничивает доступ к ней. Сообщите — подключу обходной путь.' : 'Нет связи с интернетом или сайтом.';
+    note.textContent = big.ok ? 'Рабочие данные дошли полностью.'
+      : 'Рабочие данные загрузить не удалось. Передайте администратору результаты этой проверки.';
   }
 
   // ---------- быстрые действия свайпом по строке ----------
@@ -1828,18 +2008,23 @@
       <button class="btn blue" type="button" data-act="pick">Выбрать файлы</button>
       <div id="imp-preview"></div>` });
     const f = api.body, input = f.querySelector('#imp-file'), box = f.querySelector('#imp-preview');
-    let parsed = [];
+    const pick = f.querySelector('[data-act=pick]');
+    let parsed = [], groups = [], running = false;
     const line = (k, v, c = '') => `<div class="cell static"><div class="main">${E(k)}</div><div class="value" ${c ? `style="color:var(--${c})"` : ''}>${E(v)}</div></div>`;
     const period = (sc) => (sc?.from ? `${A.fmtDate(sc.from)} – ${A.fmtDate(sc.to)}` : '');
     onActs(api, { pick: () => input.click(), run: () => run() });
     input.addEventListener('change', async () => {
       const files = [...input.files]; input.value = ''; if (!files.length) return;
+      if (running) return;
+      pick.disabled = true;
       box.innerHTML = '<div class="spinner" style="margin:24px auto"></div>';
-      parsed = [];
+      parsed = []; groups = [];
+      let filename = '';
       try {
         await loadXLSX();
         for (const file of files) {
-          const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
+          filename = file.name;
+          const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
           const ws = wb.Sheets[wb.SheetNames[0]];
           const raw = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
           const p = window.Doc1C.parse(raw); p.name = file.name;
@@ -1849,7 +2034,13 @@
           }
           parsed.push(p);
         }
-      } catch (e) { box.innerHTML = ''; return A.toast(e.message || 'Не удалось прочитать файл', true); }
+        filename = '';
+        groups = window.Doc1C.merge(parsed.filter((p) => p.rows));
+      } catch (e) {
+        parsed = []; groups = [];
+        box.innerHTML = A.emptyState('Импорт остановлен', [filename, e.message || 'Не удалось прочитать файл'].filter(Boolean).join(' · '));
+        return;
+      } finally { pick.disabled = false; }
       const ok = parsed.filter((p) => p.info.kind);
       box.innerHTML = parsed.map((p) => {
         if (p.info.kind === 'kontr') return `<div class="section-h"><span>${E(p.name)}</span></div><div class="list">${line('Вид', 'Контрагенты')}
@@ -1859,7 +2050,8 @@
         return `<div class="section-h"><span>${E(p.name)}</span></div><div class="list">${line('Вид', FILE_KIND[p.info.kind] || p.info.object)}
           ${line('Период', period(p.scope))}${line('Документов', p.rows.length.toLocaleString('ru-RU'))}
           ${inc ? line('Приход', A.fmtMoney(inc)) : ''}${dec ? line('Оплаты и возвраты', A.fmtMoney(dec)) : ''}
-          ${p.skipped ? line('Пропущено (не поставщикам)', p.skipped) : ''}</div>`;
+          ${p.skipped ? line('Пропущено', p.skipped) : ''}</div>
+          ${p.skipped ? '<div class="footer-note">Для этой выгрузки отключена отметка отсутствующих документов как удалённых.</div>' : ''}`;
       }).join('') + (ok.length ? `<div class="footer-note">Уже загруженные документы не задвоятся: изменения обновятся и попадут в историю.
           Ручные отметки («Пришёл», «Оплачено») не отменяются.</div><button class="btn blue" type="button" data-act="run">Загрузить</button>
           <div id="imp-progress" class="footer-note" style="text-align:center"></div>` : '');
@@ -1867,6 +2059,8 @@
       f.querySelector('[data-act=pick]').className = 'btn plain';
     });
     async function run() {
+      if (running || !parsed.length) return;
+      running = true;
       const prog = f.querySelector('#imp-progress'), say = (t) => { prog.textContent = t; };
       api.busy(true);
       const res = { added: 0, updated: 0, same: 0, reps_added: 0 }; let fin = null, repsRes = null;
@@ -1878,7 +2072,7 @@
         }
         const docFiles = parsed.filter((x) => x.info.kind === 'list' || x.info.kind === 'vzaimo');
         if (docFiles.length) {
-          const groups = window.Doc1C.merge(docFiles), total = groups.reduce((a, g) => a + g.rows.length, 0);
+          const total = groups.reduce((a, g) => a + g.rows.length, 0);
           const imp = uuid(); let done = 0;
           for (const g of groups) {
             for (let i = 0; i < g.rows.length; i += 2000) {
@@ -1902,8 +2096,12 @@
             for (const k of ['orders', 'payouts_linked', 'payouts_paid']) fin[k] += r.data[k] || 0;
           }
         }
-      } catch (e) { api.busy(false); say(''); return A.toast(humanError(e), true); }
-      await loadAll(); lastLoad = Date.now(); render();
+      } catch (e) {
+        running = false; api.busy(false);
+        say('Загрузка прервана. Принятые пакеты сохранены. Повторите импорт этого набора файлов.');
+        return A.toast(humanError(e), true);
+      }
+      if (await loadAll()) { lastLoad = Date.now(); render(); }
       const n = (v) => Number(v || 0).toLocaleString('ru-RU');
       box.innerHTML = `<div class="section-h"><span>Готово</span></div><div class="list">
           ${repsRes ? line('Контрагентов добавлено / обновлено', `${n(repsRes.added)} / ${n(repsRes.updated)}`) : ''}
@@ -2148,6 +2346,13 @@
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
   // ---------- старт ----------
-  sb.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT' && st.me) { st.me = null; showLogin(); } });
+  sb.auth.onAuthStateChange((ev, session) => {
+    if (!accountId) return;
+    if (ev === 'SIGNED_OUT') { useAccount(null); showLogin(); }
+    else if (ev === 'SIGNED_IN' && st.me && session?.user.id !== accountId) {
+      useAccount(null); showLogin();
+      setTimeout(boot, 0);
+    }
+  });
   boot();
 })();

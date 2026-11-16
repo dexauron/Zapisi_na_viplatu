@@ -1,13 +1,40 @@
 (function () {
   const { SUPABASE_URL, SUPABASE_KEY } = window.APP_CONFIG;
+  const authTokenUrl = new URL(`${SUPABASE_URL}/auth/v1/token`);
+  const authLogoutUrl = new URL(`${SUPABASE_URL}/auth/v1/logout`);
+  const clientOptions = { global: { fetch: async (input, init) => {
+    const target = new URL(typeof input === 'object' && 'url' in input ? input.url : input);
+    const isTokenRequest = target.pathname === authTokenUrl.pathname;
+    if (target.origin !== authTokenUrl.origin || (!isTokenRequest && target.pathname !== authLogoutUrl.pathname)) return fetch(input, init);
+    const controller = new AbortController();
+    const signal = init?.signal;
+    const abort = () => controller.abort(signal?.reason);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(input, { ...init, signal: controller.signal });
+      // HTML-страница ошибки не разбирается SDK, и HTTP-статус теряется.
+      if (isTokenRequest && response.status === 404 && !/\bjson\b/i.test(response.headers.get('content-type') || '')) {
+        return new Response('{"message":"Not Found"}', { status: 404, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (!response.body) return response;
+      // Дедлайн действует и после заголовков, пока читается тело ответа.
+      const body = await response.arrayBuffer();
+      return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    }
+  } } };
   // Страницы по ссылке (кабинет ТП, общий график) всегда работают как гость: даже если в этом браузере
   // выполнен вход в приложение, сохранённая сессия сотрудника не должна подменять доступ по ссылке.
   const sb = window.APP_ANON
-    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
-    : window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { ...clientOptions, auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
+    : window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, clientOptions);
   // Кабинет представителя по логину: обычная сессия (на странице со ссылкой основной клиент — анонимный)
   let repSb = null;
-  const repClient = () => repSb || (repSb = window.APP_ANON ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : sb);
+  const repClient = () => repSb || (repSb = window.APP_ANON ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, clientOptions) : sb);
 
   // ---------- форматирование ----------
   const money = new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', minimumFractionDigits: 2 });
@@ -231,6 +258,11 @@
 
   // ---------- лист снизу ----------
   let current = null;
+  function dismissOverlays() {
+    current?.close(true);
+    clearTimeout(toastT);
+    if (toastEl) { toastEl.classList.remove('show'); toastEl.textContent = ''; }
+  }
   function sheet({ title = '', left = 'Отмена', right = null, body = '', onMount }) {
     if (current) current.close(true);
     const back = document.createElement('div'); back.className = 'sheet-back';
@@ -515,7 +547,7 @@
   }
 
   window.App = { sb, repClient, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches, rank, mark, canon,
-    PAY, payView, docNo, ORD, dayGroups, monthOrder, orderView, orderWhen, pill, groupBy, toast, sheet, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON,
+    PAY, payView, docNo, ORD, dayGroups, monthOrder, orderView, orderWhen, pill, groupBy, toast, sheet, dismissOverlays, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON,
     hue, av, skeleton, docIcon, ageCls, moneyOrDash, setFz, getFz, loadXLSX, toExcel,
     period, periodRange, periodLabel, periodShift, periodBar, bindPeriod, inPeriod };
 })();

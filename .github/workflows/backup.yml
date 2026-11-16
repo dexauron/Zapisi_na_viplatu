@@ -1,4 +1,4 @@
-# Ночная резервная копия: все таблицы → Excel + JSON, в архиве 7z с паролем.
+# Ночная выгрузка рабочих таблиц → Excel + JSON, в архиве 7z с паролем.
 # Репозиторий публичный, поэтому архив зашифрован; хранится 30 дней во вкладке Actions → этот запуск → Artifacts.
 # Нужны секреты (Settings → Secrets and variables → Actions → Secrets):
 #   SUPABASE_SECRET_KEY — секретный ключ sb_secret_… (Supabase → Project Settings → API Keys);
@@ -28,12 +28,14 @@ jobs:
           [ -n "$KEY" ] && [ -n "$PASS" ] || { echo "::error::Нет секретов SUPABASE_SECRET_KEY и/или BACKUP_PASSWORD"; exit 1; }
           case "$KEY" in sb_secret_*|eyJ*) ;; *) echo "::error::SUPABASE_SECRET_KEY должен быть секретным ключом sb_secret_…"; exit 1;; esac
       - name: Выгрузка таблиц
+        shell: bash
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
         run: |
           pip install --quiet openpyxl==3.1.5
-          python3 scripts/backup.py out | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/backup.py out > /dev/null
+          echo "Рабочие таблицы выгружены" >> "$GITHUB_STEP_SUMMARY"
       - name: Архив с паролем
         env:
           PASS: ${{ secrets.BACKUP_PASSWORD }}

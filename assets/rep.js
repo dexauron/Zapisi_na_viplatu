@@ -22,14 +22,14 @@
     if (!session) return loginForm();
     ({ data, error } = await rb.rpc('my_rep_data'));
     if (error) {
-      if (/JWT|token|401|PGRST30/i.test(error.message + (error.code || ''))) { await rb.auth.signOut().catch(() => {}); return loginForm(); }
+      if (/JWT|token|401|PGRST30/i.test(error.message + (error.code || ''))) { await rb.auth.signOut({ scope: 'local' }).catch(() => {}); return loginForm(); }
       return fail('Нет связи', 'Проверьте интернет и обновите страницу.');
     }
     if (!data) {
       if (session.user?.email?.endsWith('@' + STAFF_DOMAIN) || !session.user?.email?.endsWith('@' + REP_DOMAIN)) {
         return fail('Это кабинет представителя', 'Вы вошли как сотрудник магазина.', '<a class="btn blue" href="app.html" style="display:block;text-align:center;text-decoration:none;margin:0 16px">Открыть приложение</a>');
       }
-      await rb.auth.signOut().catch(() => {});
+      await rb.auth.signOut({ scope: 'local' }).catch(() => {});
       return loginForm('Вход отключён. Обратитесь в магазин.');
     }
     const nb = document.querySelectorAll('#nav .nav-btn')[1];
@@ -37,7 +37,11 @@
       nb.outerHTML = '<button class="nav-btn right" id="rep-out" type="button">Выйти</button>';
       document.getElementById('rep-out').addEventListener('click', async () => {
         if (!window.confirm('Выйти из кабинета?')) return;
-        await rb.auth.signOut().catch(() => {}); location.reload();
+        try {
+          const { error } = await rb.auth.signOut({ scope: 'local' });
+          if (error) throw error;
+          location.reload();
+        } catch { A.toast('Не удалось выйти. Проверьте связь и повторите.', true); }
       });
     }
   }
@@ -59,12 +63,18 @@
     document.getElementById('rl').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = e.target, b = f.querySelector('button'), u = f.login.value.trim().toLowerCase();
+      if (b.disabled) return;
       b.disabled = true;
-      const { error: err } = await rb.auth.signInWithPassword({ email: u.includes('@') ? u : `${u}@${REP_DOMAIN}`, password: f.password.value });
-      b.disabled = false;
-      if (err) return A.toast(/Invalid login/i.test(err.message) ? 'Неверный логин или пароль' : /banned/i.test(err.message) ? 'Вход отключён. Обратитесь в магазин.'
-        : /fetch|network/i.test(err.message) ? 'Нет связи с сервером' : err.message, true);
-      location.reload();
+      try {
+        const { error } = await rb.auth.signInWithPassword({ email: u.includes('@') ? u : `${u}@${REP_DOMAIN}`, password: f.password.value });
+        if (error) throw error;
+        location.reload();
+      } catch (error) {
+        A.toast(error.code === 'invalid_credentials' || /Invalid login/i.test(error.message) ? 'Неверный логин или пароль'
+          : /banned/i.test(error.message) ? 'Вход отключён. Обратитесь в магазин.'
+          : error.status === 404 ? 'Сервер входа вернул ошибку 404. Сообщите в магазин.'
+          : error.status === 0 || /fetch|network|abort/i.test(error.message) ? 'Нет связи с сервером входа' : 'Не удалось войти. Повторите попытку.', true);
+      } finally { b.disabled = false; }
     });
   }
 

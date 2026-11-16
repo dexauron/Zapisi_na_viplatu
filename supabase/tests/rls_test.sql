@@ -283,6 +283,36 @@ begin
   select count(*) into n from public.payouts where invoice_no = 'TEST-A' and doc_id is not null;
   log := log || pg_temp.chk('68 ambiguous invoice not linked automatically', n::text, '0');
 
+  insert into public.one_c_register_reports (kind, period_start, period_end, row_count, summary, rows)
+  values ('writeoff_reasons', '2026-01-01', '2026-11-01', 1, '{"total":{"cost":500},"reasons":[]}', '[{"cost":500}]');
+  insert into public.one_c_register_reports (kind, period_start, period_end, row_count, summary, rows)
+  values ('writeoff_reasons', '2026-01-01', '2026-11-01', 2, '{"total":{"cost":800},"reasons":[]}', '[{"cost":500},{"cost":300}]')
+  on conflict (kind, period_start, period_end) do update
+  set row_count = excluded.row_count, summary = excluded.summary, rows = excluded.rows;
+  select count(*)::text || '/' || max(row_count)::text into v from public.one_c_register_reports
+  where kind = 'writeoff_reasons' and period_start = '2026-01-01' and period_end = '2026-11-01';
+  log := log || pg_temp.chk('69 admin reimport replaces register rows', v, '1/2');
+  begin
+    update public.one_c_register_reports set row_count = 3;
+    log := log || '70 FAIL invalid register row count accepted'::text;
+  exception when check_violation then log := log || '70 invalid register row count blocked ok'::text; end;
+  perform set_config('request.jwt.claims', json_build_object('sub', emp, 'role', 'authenticated')::text, true);
+  select count(*) into n from public.one_c_register_reports;
+  log := log || pg_temp.chk('71 employee sees no registers', n::text, '0');
+  update public.one_c_register_reports set row_count = 0;
+  get diagnostics n = row_count;
+  log := log || pg_temp.chk('72 employee changes no registers', n::text, '0');
+  begin
+    insert into public.one_c_register_reports (kind, period_start, period_end, row_count, summary, rows)
+    values ('returns_by_reason', '2026-01-01', '2026-11-01', 0, '{"total":{"cost":0},"reasons":[]}', '[]');
+    log := log || '73 FAIL employee inserted register'::text;
+  exception when insufficient_privilege then log := log || '73 employee register insert blocked ok'::text; end;
+  perform set_config('role', 'anon', true);
+  begin
+    perform id from public.one_c_register_reports;
+    log := log || '74 FAIL anon read register'::text;
+  exception when insufficient_privilege then log := log || '74 anon register read blocked ok'::text; end;
+
   raise exception E'РЕЗУЛЬТАТ\n%', array_to_string(log, E'\n');
 end
 $test$;

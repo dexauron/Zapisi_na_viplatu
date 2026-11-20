@@ -1,0 +1,10 @@
+{
+  "name": "sverka-tests",
+  "private": true,
+  "scripts": {
+    "test": "node --test *.test.cjs && node ui-payouts.cjs"
+  },
+  "devDependencies": {
+    "jsdom": "27.0.1"
+  }
+}

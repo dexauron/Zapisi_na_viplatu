@@ -107,7 +107,7 @@ begin
   perform set_config('request.jwt.claims', json_build_object('sub', adm, 'role', 'authenticated')::text, true);
   select count(*) into n from public.payouts where rep_id = any(array[rep, rep2]); log := log || pg_temp.chk('27 admin sees payouts', (n)::text, '2');
   select count(*) into n from public.rep_access a join public.reps r on r.id = a.rep_id where r.full_name in ('ТП Тест', 'ТП Другой', 'Новый ТП'); log := log || pg_temp.chk('28 admin sees tokens', (n)::text, '3');
-  update public.payouts set status = 'paid' where rep_id = rep; get diagnostics n = row_count;
+  perform public.set_payout_paid(id, true, updated_at) from public.payouts where rep_id = rep; get diagnostics n = row_count;
   select (paid_at is not null)::text into v from public.payouts where rep_id = rep;
   log := log || pg_temp.chk('29a admin paid rows', n::text, '1') || pg_temp.chk('; 29b paid_at set', v, 'true');
   delete from public.orders where rep_id = rep2; get diagnostics n = row_count; log := log || pg_temp.chk('30 admin deleted order rows', (n)::text, '1');
@@ -185,7 +185,7 @@ begin
     (public.confirm_receipt((select token from public.rep_access where rep_id = rep2), v::uuid) is null)::text, 'true');
   log := log || pg_temp.chk('48 rep confirms receipt', (public.confirm_receipt(tok, v::uuid) is not null)::text, 'true');
   perform set_config('role', 'authenticated', true);
-  update public.payouts set status = 'to_pay' where id = v::uuid;
+  perform public.set_payout_paid(id, false, updated_at) from public.payouts where id = v::uuid;
   select count(*) into n from public.payouts where id = v::uuid and received_at is not null;
   log := log || pg_temp.chk('49 unpaid resets receipt', n::text, '0');
 
@@ -205,7 +205,7 @@ begin
   -- Учётка представителя (логин и пароль): своё — через my_rep_data, в таблицы не ходит
   perform set_config('request.jwt.claims', json_build_object('sub', adm, 'role', 'authenticated')::text, true);
   select id into pid from public.payouts where rep_id = rep2 limit 1;
-  update public.payouts set status = 'paid' where id = pid;
+  perform public.set_payout_paid(id, true, updated_at) from public.payouts where id = pid;
   select count(*) into n from public.payouts where rep_id = rep;
   perform set_config('role', 'postgres', true);
   insert into auth.users (id, instance_id, aud, role, email, created_at, updated_at)

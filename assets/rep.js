@@ -98,8 +98,8 @@
   // Период по умолчанию — текущий месяц. Ожидаемые заказы и неоплаченные записи видны всегда; поиск — по всем датам
   const st = { tab: 'orders', filter: null, q: '', per: A.period('month') };
   const inPer = (d) => !!st.q || A.inPeriod(st.per, d);
-  const vOrders = () => orders.filter((o) => o.status === 'ordered' || inPer(o.delivered_at?.slice(0, 10) || o.date));
-  const vPayouts = () => payouts.filter((p) => p.status !== 'paid' || inPer(p.date));
+  const vOrders = () => orders.filter((o) => o.status === 'ordered' || inPer(A.isoDay(o.delivered_at) || o.date));
+  const vPayouts = () => payouts.filter((p) => p.status !== 'paid' || inPer(A.isoDay(p.paid_at) || p.date));
   const vDocs = () => docs.filter((d) => inPer(d.date));
   document.getElementById('nav-title').textContent = data.rep.full_name;
   document.title = data.rep.full_name;
@@ -140,15 +140,16 @@
       const ds = vDocs();
       return [
         ['in', 'Приход', 'blue', ds.filter((d) => d.kind === 'in')],
-        ['pay', 'Оплачено', 'green', ds.filter((d) => d.kind === 'pay')],
+        ['pay', 'Оплаты по 1С', 'green', ds.filter((d) => d.kind === 'pay')],
         ['ret', 'Возвраты', 'orange', ds.filter((d) => d.kind === 'ret')],
-        ...(data.debt != null ? [[null, 'Долг магазина', 'gray', [], Math.max(0, Number(data.debt))]] : []),
+        ...(data.debt != null ? [[null, 'Долг по 1С', 'gray', [], Math.max(0, Number(data.debt))]] : []),
       ];
     }
     const ps = vPayouts();
     return [
-      ['to_pay', 'Не оплачено', 'orange', ps.filter((p) => p.status !== 'paid')],
-      ['paid', 'Оплачено', 'green', ps.filter((p) => p.status === 'paid')],
+      ['to_pay', 'Ожидают выдачи', 'orange', ps.filter((p) => p.status !== 'paid')],
+      ['reserved', 'Деньги отложены', 'blue', ps.filter((p) => p.status === 'reserved'), A.sum(ps.filter((p) => p.status === 'reserved').map((p) => ({ amount: p.reserved_amount })))],
+      ['paid', 'Деньги выданы', 'green', ps.filter((p) => p.status === 'paid')],
     ];
   }
   function renderStats() {
@@ -169,8 +170,9 @@
     if (st.tab === 'docs') {
       return vDocs().filter((d) => (!st.filter || d.kind === st.filter) && A.matches(st.q, d.num, shortNum(d.num), d.in_no, DOC[d.kind] || d.title, d.amount, A.fmtMoney(d.amount), A.fmtDate(d.date)));
     }
-    return vPayouts().filter((p) => (!st.filter || (st.filter === 'paid') === (p.status === 'paid'))
-      && A.matches(st.q, p.invoice_no, p.store, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.date), A.payView(p.status).label));
+    return vPayouts().filter((p) => (!st.filter || (st.filter === 'to_pay' ? p.status !== 'paid' : p.status === st.filter))
+      && A.matches(st.q, p.invoice_no, p.store, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.date), A.fmtDate(p.paid_at), A.payView(p.status).label))
+      .map((p) => ({ ...p, date: p.status === 'paid' ? A.isoDay(p.paid_at) || p.date : p.date }));
   }
 
   function renderList() {
@@ -232,7 +234,9 @@
       const api = A.sheet({ title: 'Выплата', left: 'Закрыть', body: `
         <div class="hero"><div class="amount ${p.status === 'paid' ? 'paid' : ''}">${A.fmtMoney(p.amount)}</div><div class="who">${A.pill(A.payView(p.status))}</div></div>
         <div class="section-h"><span>Детали</span></div>
-        ${info([['№ накладной', p.invoice_no], ['Дата', A.fmtDate(p.date)], ['Магазин', p.store], ['Основание', p.basis], ['Оплачено', A.fmtDate(p.paid_at)],
+        ${p.status === 'reserved' ? '<div class="footer-note">Деньги ожидают получения. Запись остаётся активной до выдачи.</div>' : ''}
+        ${info([['№ накладной', p.invoice_no], ['Дата', A.fmtDate(p.date)], ['Магазин', p.store], ['Основание', p.basis],
+          ['Отложено по расходнику', Number(p.reserved_amount) > 0 ? A.fmtMoney(p.reserved_amount) : null], ['Деньги выданы', A.fmtDate(p.paid_at)],
           ['Вы получили', p.received_at ? A.fmtDate(p.received_at) : null], ['Комментарий', p.comment]])}
         ${canConfirm ? `<button class="btn green" type="button" id="got">Получил ${A.esc(A.fmtMoney(p.amount))}</button>
           <div class="footer-note">Нажмите, когда деньги у вас: магазин увидит подтверждение.</div>` : ''}` });

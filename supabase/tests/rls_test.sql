@@ -20,6 +20,7 @@ declare
   stranger uuid := gen_random_uuid(); owner uuid := gen_random_uuid();
   rep uuid; rep2 uuid; store uuid; ord uuid; tok text; stok text; n int; j json; v text; log text[] := '{}';
   repu uuid := gen_random_uuid(); pid uuid; pid2 uuid;
+  active_before int; active_after int;
 begin
   -- Данные (от имени владельца базы, RLS не действует)
   insert into auth.users (id, instance_id, aud, role, email, created_at, updated_at)
@@ -107,7 +108,7 @@ begin
   perform set_config('request.jwt.claims', json_build_object('sub', adm, 'role', 'authenticated')::text, true);
   select count(*) into n from public.payouts where rep_id = any(array[rep, rep2]); log := log || pg_temp.chk('27 admin sees payouts', (n)::text, '2');
   select count(*) into n from public.rep_access a join public.reps r on r.id = a.rep_id where r.full_name in ('ТП Тест', 'ТП Другой', 'Новый ТП'); log := log || pg_temp.chk('28 admin sees tokens', (n)::text, '3');
-  update public.payouts set status = 'paid' where rep_id = rep; get diagnostics n = row_count;
+  perform public.set_payout_paid(id, true, updated_at) from public.payouts where rep_id = rep; get diagnostics n = row_count;
   select (paid_at is not null)::text into v from public.payouts where rep_id = rep;
   log := log || pg_temp.chk('29a admin paid rows', n::text, '1') || pg_temp.chk('; 29b paid_at set', v, 'true');
   delete from public.orders where rep_id = rep2; get diagnostics n = row_count; log := log || pg_temp.chk('30 admin deleted order rows', (n)::text, '1');
@@ -122,8 +123,12 @@ begin
   log := log || pg_temp.chk('32 import added/updated/skipped', (j ->> 'added') || '/' || (j ->> 'updated') || '/' || (j ->> 'skipped'), '1/1/1');
   select count(*) into n from public.rep_access a join public.reps r on r.id = a.rep_id where r.ext_key = 'ооо тест тп петров';
   log := log || pg_temp.chk('33 imported rep got link', n::text, '1');
+  -- Рабочая база может содержать других импортированных ТП: проверяем счётчик
+  -- по изменению состояния, а отключение конкретного тестового ТП — отдельно ниже.
+  select count(*) into active_before from public.reps where ext_key is not null and active;
   j := public.import_reps(jsonb_build_array(jsonb_build_object('key', 'ооо тест тп петров', 'full_name', 'Петров', 'company', 'ООО Тест', 'phone', '+79990000000')), true);
-  log := log || pg_temp.chk('34 reimport same/deactivated', (j ->> 'same') || '/' || (j ->> 'deactivated'), '1/1');
+  select count(*) into active_after from public.reps where ext_key is not null and active;
+  log := log || pg_temp.chk('34 reimport same/deactivated', (j ->> 'same') || '/' || (j ->> 'deactivated'), '1/' || (active_before - active_after));
   select active::text into v from public.reps where id = rep2; log := log || pg_temp.chk('35 missing rep disabled', v, 'false');
   select active::text into v from public.reps where id = rep; log := log || pg_temp.chk('36 manual rep untouched', v, 'true');
 
@@ -185,7 +190,7 @@ begin
     (public.confirm_receipt((select token from public.rep_access where rep_id = rep2), v::uuid) is null)::text, 'true');
   log := log || pg_temp.chk('48 rep confirms receipt', (public.confirm_receipt(tok, v::uuid) is not null)::text, 'true');
   perform set_config('role', 'authenticated', true);
-  update public.payouts set status = 'to_pay' where id = v::uuid;
+  perform public.set_payout_paid(id, false, updated_at) from public.payouts where id = v::uuid;
   select count(*) into n from public.payouts where id = v::uuid and received_at is not null;
   log := log || pg_temp.chk('49 unpaid resets receipt', n::text, '0');
 
@@ -199,13 +204,13 @@ begin
     '[{"title":"Приходная накладная","num":"ПФ1","at":"2026-09-01T10:00:00","kontr":"Поставщик Тест","inc":900,"dec":0,"in_no":"55","src":"l"}]'::jsonb);
   select inc::text || '/' || coalesce(in_no, '-') into v from public.docs where num = 'ПФ1';
   log := log || pg_temp.chk('50 list keeps settlement sum, adds in_no', v, '1000.00/55');
-  select count(*) into n from public.audit_log where entity = 'docs' and changes ? 'in_no';
+  select count(*) into n from public.audit_log where entity = 'docs' and user_id = adm and changes ? 'in_no';
   log := log || pg_temp.chk('51 filling empty field is not history', n::text, '0');
 
   -- Учётка представителя (логин и пароль): своё — через my_rep_data, в таблицы не ходит
   perform set_config('request.jwt.claims', json_build_object('sub', adm, 'role', 'authenticated')::text, true);
   select id into pid from public.payouts where rep_id = rep2 limit 1;
-  update public.payouts set status = 'paid' where id = pid;
+  perform public.set_payout_paid(id, true, updated_at) from public.payouts where id = pid;
   select count(*) into n from public.payouts where rep_id = rep;
   perform set_config('role', 'postgres', true);
   insert into auth.users (id, instance_id, aud, role, email, created_at, updated_at)
@@ -257,7 +262,7 @@ begin
   j := public.delete_docs('2026-09-01', '2026-09-30', array['in', 'ret', 'other']);
   log := log || pg_temp.chk('63 payout kept, link removed', (select coalesce(doc_id::text, 'none') from public.payouts where id = pid2), 'none');
   log := log || pg_temp.chk('64 purge: summary rows, no per-row history',
-    (select count(*) from public.audit_log where entity = 'docs' and action = 'purge')::text || '/'
+    (select count(*) from public.audit_log where entity = 'docs' and action = 'purge' and user_id = adm)::text || '/'
     || (select count(*) from public.audit_log where entity = 'payouts' and entity_id = pid2 and action = 'update')::text, '2/0');
 
   -- Сводка: только админ; кабинет ТП видит название магазина

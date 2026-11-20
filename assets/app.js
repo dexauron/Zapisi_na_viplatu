@@ -331,7 +331,7 @@
     const seg = st.seg.orders, t = A.today(), q = (st.q.orders || '').trim(), P = st.per.orders, r = A.periodRange(P);
     // в выбранном периоде; ожидаемые с прошедшей датой и без даты видны всегда. Поиск — по всем датам
     const inView = (o) => !!q || !r || (o.status === 'ordered' ? !o.expected_date || o.expected_date < t || A.inPeriod(P, o.expected_date)
-      : A.inPeriod(P, o.status === 'delivered' ? o.delivered_at?.slice(0, 10) || o.order_date : o.order_date));
+      : A.inPeriod(P, o.status === 'delivered' ? A.isoDay(o.delivered_at) || o.order_date : o.order_date));
     const view = st.orders.filter(inView);
     const waitAll = view.filter((o) => o.status === 'ordered'), deliv = view.filter((o) => o.status === 'delivered');
     // плитки итогов — они же фильтр; повторное нажатие — все заказы периода
@@ -347,7 +347,7 @@
         title: (g) => (g.key === 'none' ? 'Без даты прихода' : null) });
     } else {
       if (seg === 'delivered') rows = rows.filter((o) => o.status === 'delivered');
-      const dateOf = seg === 'delivered' ? (o) => o.delivered_at?.slice(0, 10) || o.order_date : (o) => o.order_date;
+      const dateOf = seg === 'delivered' ? (o) => A.isoDay(o.delivered_at) || o.order_date : (o) => o.order_date;
       html += dateSections(rows, dateOf, orderCell, { pastLabel: seg === 'delivered' ? false : 'Прошедшие' });
     }
     if (!rows.length) html += A.emptyState(q ? 'Ничего не найдено' : seg === 'wait' ? 'Нет ожидаемых заказов' : 'Заказов за период нет',
@@ -567,29 +567,32 @@
   // ВЫПЛАТЫ (админ)
   // =====================================================================
   function renderPayouts() {
-    if (!['all', 'to_pay', 'paid'].includes(st.seg.payouts)) st.seg.payouts = 'all';
+    if (!['all', 'to_pay', 'reserved', 'paid'].includes(st.seg.payouts)) st.seg.payouts = 'all';
     frame('Выплаты', null, 'payouts', 'Имя, № накладной, сумма');
     render.body = renderPayoutsBody; renderPayoutsBody();
   }
   function renderPayoutsBody() {
     const seg = st.seg.payouts, t0 = A.today(), q0 = (st.q.payouts || '').trim(), P = st.per.payouts, per = A.periodRange(P);
     const isPaid = (p) => p.status === 'paid';
-    // в выбранном периоде (по дате записи); неоплаченные с прошедшей датой видны всегда. Поиск — по всем датам
-    const inView = (p) => !!q0 || !per || (!isPaid(p) && p.payout_date < t0) || A.inPeriod(P, p.payout_date);
+    const dateOf = (p) => isPaid(p) ? A.isoDay(p.paid_at) || p.payout_date : p.payout_date;
+    // Завершённые выплаты — по дате фактической выдачи; старые активные записи видны всегда.
+    const inView = (p) => !!q0 || !per || (!isPaid(p) && p.payout_date < t0) || A.inPeriod(P, dateOf(p));
     const view = st.payouts.filter(inView);
-    // плитки итогов — они же фильтр: «Не оплачено» / «Оплачено»; повторное нажатие — все записи периода
-    const rows = view.filter((p) => (seg === 'all' || (seg === 'paid') === isPaid(p)) && A.matches(st.q.payouts,
-      repById(p.rep_id)?.full_name, repById(p.rep_id)?.company, p.invoice_no, storeById(p.store_id)?.name, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.payout_date)));
-    const open = view.filter((p) => !isPaid(p)), paidM = view.filter(isPaid);
+    // Каждый статус имеет собственный фильтр; резерв остаётся в активных записях по всем датам.
+    const rows = view.filter((p) => (seg === 'all' || (seg === 'to_pay' ? !isPaid(p) : p.status === seg)) && A.matches(st.q.payouts,
+      repById(p.rep_id)?.full_name, repById(p.rep_id)?.company, p.invoice_no, storeById(p.store_id)?.name, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.payout_date), A.payView(p.status).label));
+    const open = view.filter((p) => !isPaid(p)), reserved = view.filter((p) => p.status === 'reserved'), paidM = view.filter(isPaid);
     let html = (q0 ? '' : A.periodBar(P)) + `<div class="stats">
-      <button class="stat ${seg === 'to_pay' ? 'on' : ''}" data-seg="to_pay"><div class="k"><span class="dot" style="background:var(--orange)"></span>Не оплачено · ${open.length}</div>${statV(A.sum(open))}</button>
-      <button class="stat ${seg === 'paid' ? 'on' : ''}" data-seg="paid"><div class="k"><span class="dot" style="background:var(--green)"></span>Оплачено · ${paidM.length}</div>${statV(A.sum(paidM))}</button></div>
-      ${seg !== 'all' ? `<button class="chip filter-chip" type="button" data-seg="${seg}">${seg === 'paid' ? 'Только оплаченные' : 'Только неоплаченные'} ✕</button>` : ''}`;
+      <button class="stat ${seg === 'to_pay' ? 'on' : ''}" data-seg="to_pay"><div class="k"><span class="dot" style="background:var(--orange)"></span>Ожидают выдачи · ${open.length}</div>${statV(A.sum(open))}</button>
+      <button class="stat ${seg === 'reserved' ? 'on' : ''}" data-seg="reserved"><div class="k"><span class="dot" style="background:var(--blue)"></span>Деньги отложены · ${reserved.length}</div>${statV(A.sum(reserved.map((p) => ({ amount: p.reserved_amount }))))}</button>
+      <button class="stat ${seg === 'paid' ? 'on' : ''}" data-seg="paid"><div class="k"><span class="dot" style="background:var(--green)"></span>Деньги выданы · ${paidM.length}</div>${statV(A.sum(paidM))}</button></div>
+      <div class="footer-note">Отложенные деньги входят в сумму, ожидающую выдачи.</div>
+      ${seg !== 'all' ? `<button class="chip filter-chip" type="button" data-seg="${seg}">${E(seg === 'to_pay' ? 'Ожидают выдачи' : A.payView(seg).label)} ✕</button>` : ''}`;
     const t = A.today(), pc = (x, c) => payoutCell(x, undefined, '', c);
-    const ahead = rows.filter((p) => p.payout_date >= t), late = rows.filter((p) => p.payout_date < t && !isPaid(p)), done = rows.filter((p) => p.payout_date < t && isPaid(p));
-    html += dateSections(ahead, (p) => p.payout_date, pc, { pastLabel: false });
-    if (late.length) html += `<div class="past-sep red"><span>Просрочено · ${A.fmtMoney(A.sum(late))}</span></div>` + dateSections(late, (p) => p.payout_date, pc, { pastLabel: false, pastRed: true });
-    html += dateSections(done, (p) => p.payout_date, pc, { pastLabel: 'Оплачено раньше' });
+    const ahead = rows.filter((p) => dateOf(p) >= t), late = rows.filter((p) => dateOf(p) < t && !isPaid(p)), done = rows.filter((p) => dateOf(p) < t && isPaid(p));
+    html += dateSections(ahead, dateOf, pc, { pastLabel: false });
+    if (late.length) html += `<div class="past-sep"><span>Ожидают выдачи с прошлых дат · ${A.fmtMoney(A.sum(late))}</span></div>` + dateSections(late, dateOf, pc, { pastLabel: false });
+    html += dateSections(done, dateOf, pc, { pastLabel: 'Выдано раньше' });
     const q = (st.q.payouts || '').trim();
     if (!rows.length && !q) html += A.emptyState('Выплат за период нет', 'Выберите другой период или нажмите «+»');
     if (rows.length) html += `<button class="btn plain" type="button" id="pay-xls">Выгрузить в Excel · ${rows.length}</button>`;
@@ -602,13 +605,13 @@
     }));
     bindCells($('body'));
     $('pay-xls')?.addEventListener('click', () => A.toExcel(`Выплаты ${q ? 'поиск' : A.periodLabel(P)}`,
-      ['Дата', 'Поставщик', 'ИП / компания', '№ накладной', 'Сумма', 'Статус', 'Оплачено', 'Получил', 'Основание', 'Комментарий'],
+      ['Дата', 'Поставщик', 'ИП / компания', '№ накладной', 'Сумма', 'Статус', 'Деньги выданы', 'Получил', 'Основание', 'Комментарий', 'Отложено по РКО'],
       rows.map((p) => { const r = repById(p.rep_id); return [p.payout_date, r?.full_name || '', r?.company || '', p.invoice_no || '', Number(p.amount),
-        A.payView(p.status).label, p.paid_at ? p.paid_at.slice(0, 10) : '', p.received_at ? p.received_at.slice(0, 10) : '', p.basis || '', p.comment || '']; }),
+        A.payView(p.status).label, A.isoDay(p.paid_at), A.isoDay(p.received_at), p.basis || '', p.comment || '', Number(p.reserved_amount || 0)]; }),
       [11, 28, 24, 14, 12, 11, 11, 11, 20, 24]));
     if (q) findInvoices(q, rows.length);
   }
-  // Поиск накладной 1С по номеру прямо в «Выплатах»: сразу «Записать» или «Оплачено»
+  // Поиск накладной 1С: записать на выплату или подтвердить выдачу по существующей записи
   let findSeq = 0;
   async function findInvoices(q, localCount) {
     const seq = ++findSeq, box = $('inv-found');
@@ -621,10 +624,10 @@
     box.innerHTML = `<div class="section-h"><span>Накладные в 1С · ${data.length}</span></div><div class="list">${data.map((d) => {
       const r = repById(d.rep_id), open = Number(d.open) > 0;
       const state = d.pay_status ? A.payView(d.pay_status) : open ? { label: 'Не оплачено в 1С', c: 'orange' } : { label: 'Оплачено в 1С', c: 'green' };
-      // в 1С уже оплачена и записи нет — делать нечего
-      const acts = d.pay_status === 'paid' || (!open && !d.pay_id) ? '' : d.pay_id
-        ? `<button class="chip on-green" data-inv-paid="${d.id}">Оплачено</button>`
-        : `<button class="chip" data-inv-rec="${d.id}">Записать</button><button class="chip on-green" data-inv-paid="${d.id}">Оплачено</button>`;
+      // Закрытая по 1С накладная также может ждать фактической выдачи наличных.
+      const acts = d.pay_status === 'paid' ? '' : d.pay_id
+        ? `<button class="chip on-green" data-inv-paid="${d.id}">Деньги выданы</button>`
+        : `<button class="chip" data-inv-rec="${d.id}">Записать</button>`;
       return `<div class="cell inv" data-inv="${d.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
           <div class="s">${E([A.docNo({ ...d, kind: 'in' }), A.fmtShort(d.at.slice(0, 10)), open ? 'не оплачено ' + A.fmtMoney(d.open) : ''].filter(Boolean).join(' · '))}</div>
           <div class="inv-acts">${acts}</div></div>
@@ -637,29 +640,27 @@
     }));
     box.querySelectorAll('[data-inv-paid]').forEach((b) => b.addEventListener('click', () => invoicePaid(byId.get(b.dataset.invPaid))));
   }
-  // «Оплачено» по накладной: есть запись — отметить её; нет — создать запись сразу оплаченной (с «Вернуть»)
+  // Для фактической выдачи сначала должна существовать отдельная запись на выплату.
   async function invoicePaid(d) {
-    A.haptic();
-    if (d.pay_id && st.payouts.some((p) => p.id === d.pay_id)) { await changeStatus('payouts', d.pay_id, 'paid', 'Оплачено'); return; }
+    if (!d.pay_id) return;
     try {
-      const amount = Number(d.open) > 0 ? Number(d.open) : Number(d.inc);
-      const r = await write('payouts', 'insert', null, { rep_id: d.rep_id, doc_id: d.id, amount, invoice_no: d.in_no || null, payout_date: A.today(), status: 'paid' });
-      st.payouts.sort((a, b) => b.payout_date.localeCompare(a.payout_date));
-      if (st.unrec?.n > 0 && Number(d.open) > 0 && !d.pay_id) { st.unrec.n--; st.unrec.sum = Math.max(0, st.unrec.sum - amount); }
-      rerender();
-      A.toast('Оплачено · запись создана' + (r.offline ? ' · отправится при появлении сети' : ''), false, { label: 'Вернуть', run: async () => {
-        try { await write('payouts', 'delete', r.id); rerender(); A.haptic(); } catch (e) { A.toast(humanError(e), true); }
-      } });
+      if (!st.payouts.some((p) => p.id === d.pay_id)) {
+        const { data, error } = await sb.from('payouts').select('*').eq('id', d.pay_id).single();
+        if (error) throw error;
+        st.payouts.push(data);
+      }
+      await changeStatus('payouts', d.pay_id, 'paid', 'Деньги выданы');
     } catch (e) { A.toast(humanError(e), true); }
   }
-  // Строка выплаты: кружок слева — как в «Напоминаниях»: пустой оранжевый = запись, зелёный с галочкой = оплачено
-  const payNote = (p) => [p.invoice_no && '№ ' + p.invoice_no, p.basis].filter(Boolean).join(' · ');
+  // Строка выплаты: кружок подтверждает фактическую выдачу; резерв показывается отдельной подписью
+  const payNote = (p) => [p.invoice_no && '№ ' + p.invoice_no, p.basis, p.status === 'reserved' && Number(p.reserved_amount) < Number(p.amount) ? 'отложено ' + A.fmtMoney(p.reserved_amount) + ' из ' + A.fmtMoney(p.amount) : null].filter(Boolean).join(' · ');
   function payoutCell(p, sub, warn = '', child = false) {
     const r = repById(p.rep_id), paid = p.status === 'paid';
+    if (!warn && p.link_review_required) warn = 'Проверьте накладную';
     if (sub === true || sub === false) { child = sub; sub = undefined; } // вызов из treeList: (x, child)
-    if (sub === undefined) sub = [A.fmtShort(p.payout_date), payNote(p), child ? '' : r?.company].filter(Boolean).join(' · ');
+    if (sub === undefined) sub = [paid ? 'выдано ' + A.fmtShort(A.isoDay(p.paid_at) || p.payout_date) : A.fmtShort(p.payout_date), payNote(p), child ? '' : r?.company].filter(Boolean).join(' · ');
     return `<button class="cell pay ${paid ? 'paid' : ''} ${child ? 'child' : ''}" data-pay="${p.id}">
-      ${isAdmin() ? `<span class="tick" data-tick role="checkbox" aria-checked="${paid}" aria-label="${paid ? 'Снять оплату' : 'Отметить оплаченной'}"></span>` : ''}
+      ${isAdmin() ? `<span class="tick" data-tick role="checkbox" aria-checked="${paid}" aria-label="${paid ? 'Отменить выдачу' : 'Деньги выданы'}"></span>` : ''}
       <div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
       <div class="s">${p._pending ? '<span class="pending">● не отправлено</span> ' : ''}${E(sub ?? [A.fmtShort(p.payout_date), payNote(p)].filter(Boolean).join(' · '))}${paid && p.received_at ? ' · <span class="got">получил ✓</span>' : ''}${warn ? ` <span class="warn">${E(warn)}</span>` : ''}</div></div>
       <div class="r"><div class="amt">${A.fmtMoney(p.amount)}</div>${A.pill(A.payView(p.status))}</div></button>`;
@@ -667,8 +668,8 @@
   async function togglePaid(id, cell) {
     const p = st.payouts.find((x) => x.id === id); if (!p) return;
     A.haptic();
-    if (p.status === 'paid') await changeStatus('payouts', id, 'to_pay', 'Оплата снята');
-    else await changeStatus('payouts', id, 'paid', 'Оплачено');
+    if (p.status === 'paid') await changeStatus('payouts', id, 'to_pay', 'Отметка о выдаче отменена');
+    else await changeStatus('payouts', id, 'paid', 'Деньги выданы');
     // строка в открытой карточке не перерисовывается вместе со страницей — обновить на месте
     if (cell?.isConnected) {
       const paid = p.status === 'paid';
@@ -690,9 +691,12 @@
     const paid = p.status === 'paid';
     const api = A.sheet({ title: 'Выплата', left: 'Закрыть', body: `
       <div class="hero"><div class="amount ${paid ? 'paid' : ''}">${A.fmtMoney(p.amount)}</div><div class="who">${E(repLabel(repById(p.rep_id)))}</div>${A.pill(A.payView(p.status))}</div>
+      ${paid && !p.paid_by && !p.received_at ? '<div class="footer-note warn">Отметка создана в прежней версии. Проверьте фактическую выдачу. Если деньги ещё у вас, нажмите «Отменить выдачу».</div>' : ''}
+      ${p.link_review_required ? '<div class="footer-note warn">Накладная изменилась. Проверьте запись; автоматический подбор другой накладной остановлен.</div>' : ''}
       <div class="section-h"><span>Детали</span></div>
-      ${info([['№ накладной', p.invoice_no], ['Дата выплаты', A.fmtDate(p.payout_date)], ['Магазин', storeById(p.store_id)?.name], ['Основание', p.basis], ['Оплачено', A.fmtDate(p.paid_at)], ['Представитель получил', p.received_at ? A.fmtDate(p.received_at) : (paid ? 'ещё не подтвердил' : null)], ['Комментарий', p.comment]])}
-      ${paid ? btn('st_to_pay', 'Снять оплату') : btn('st_paid', 'Отметить оплаченной', 'green')}${p.status !== 'paid' && p.payout_date >= A.today() ? btn('remind', 'Напомнить в календаре') : ''}${btn('edit', 'Изменить')}${btn('delete', 'Удалить', 'red')}
+      ${info([['№ накладной', p.invoice_no], ['Дата записи', A.fmtDate(p.payout_date)], ['Магазин', storeById(p.store_id)?.name], ['Основание', p.basis], ['Деньги выданы', A.fmtDate(p.paid_at)], ['Отложено по РКО', Number(p.reserved_amount) > 0 ? A.fmtMoney(p.reserved_amount) : null], ['Отложено с', A.fmtDate(p.reserved_at)], ['Выдал', staffName(p.paid_by)], ['Представитель получил', p.received_at ? A.fmtDate(p.received_at) : (paid ? 'ещё не подтвердил' : null)], ['Комментарий', p.comment]])}
+      ${paid ? btn('st_to_pay', 'Отменить выдачу') : btn('st_paid', 'Деньги выданы', 'green')}${p.status !== 'paid' && p.payout_date >= A.today() ? btn('remind', 'Напомнить в календаре') : ''}${!paid ? btn('edit', 'Изменить') + btn('delete', 'Удалить', 'red') : ''}
+      ${payoutReviews().some((w) => w.id === id) ? btn('reviewed', 'Прежняя отметка проверена') : ''}
       <div class="section-h"><span>История</span></div><div id="hist"></div>` });
     loadHistory({ entity_id: id }, api.body.querySelector('#hist'));
     if (p.doc_id) {
@@ -702,7 +706,7 @@
         box.innerHTML = `<div class="section-h"><span>Накладная в 1С</span></div>${info([['Накладная', A.docNo({ ...d, kind: 'in' })],
           ['Дата', A.fmtDate(d.doc_at.slice(0, 10))], ['Сумма', A.fmtMoney(d.inc)],
           ['В 1С', d.deleted ? 'удалена' : Number(d.open_amount) > 0 ? `не оплачено ${A.fmtMoney(d.open_amount)}` : 'оплачена']])}
-          ${paid && Number(d.open_amount) > 0 && !d.deleted ? '<div class="footer-note warn">Отмечено «Оплачено», а в 1С расходника на эту накладную нет.</div>' : ''}`;
+          ${paid && Number(d.open_amount) > 0 && !d.deleted ? '<div class="footer-note warn">Выдача подтверждена вручную. В 1С по накладной остаётся долг.</div>' : ''}`;
         api.body.querySelector('.section-h').before(box);
       });
     }
@@ -710,8 +714,9 @@
       remind: () => ics(`Выплата: ${repById(p.rep_id)?.full_name || ''}`, p.payout_date, `Выплатить ${A.fmtMoney(p.amount)}${payNote(p) ? ' — ' + payNote(p) : ''}.`),
       edit: () => payoutForm(p),
       delete: () => { api.close(); deleteWithUndo('payouts', id, 'Выплата удалена'); },
-      st_paid: () => { api.close(); changeStatus('payouts', id, 'paid', 'Оплачено'); },
-      st_to_pay: () => { api.close(); changeStatus('payouts', id, 'to_pay', 'Оплата снята'); },
+      st_paid: () => { api.close(); changeStatus('payouts', id, 'paid', 'Деньги выданы'); },
+      st_to_pay: () => { api.close(); changeStatus('payouts', id, 'to_pay', 'Отметка о выдаче отменена'); },
+      reviewed: () => { finishPayoutReview(id); api.close(); },
     };
     onActs(api, map);
   }
@@ -725,9 +730,7 @@
           <input type="hidden" name="doc_id" value="${E(p?.doc_id || preset.doc_id || '')}">
           ${field('№ накладной', `<input name="invoice_no" placeholder="необязательно" maxlength="64" autocomplete="off" autocorrect="off" spellcheck="false" value="${E(p?.invoice_no || preset.invoice_no || '')}">`)}
           ${field('Дата выплаты', `<input name="payout_date" type="date" value="${p?.payout_date || preset.payout_date || A.today()}">`)}
-          <div class="field"><span>Статус</span><input type="hidden" name="status" value="${p?.status === 'paid' ? 'paid' : 'to_pay'}">
-            <div class="segmented in-field" data-status>${Object.entries(A.PAY).map(([k, v]) =>
-              `<button type="button" data-v="${k}" class="${k === (p?.status === 'paid' ? 'paid' : 'to_pay') ? 'on' : ''}">${v.label}</button>`).join('')}</div></div>
+          <div class="cell static"><div class="main">Статус</div>${A.pill(A.payView(p?.status || 'to_pay'))}</div>
           ${field('Основание', `<input name="basis" placeholder="бонус, акция" value="${E(p?.basis || '')}">`)}
         </div>
         <div class="section-h"><span>Комментарий</span></div><div class="list"><label class="field"><textarea name="comment">${E(p?.comment || '')}</textarea></label></div>
@@ -798,11 +801,6 @@
     // накладные привязаны к поставщику: сменили поставщика — выбор снимается
     bindPickers(api, (id) => { if (id && docRep && id !== docRep) { picked.clear(); docRep = null; applyPicked(); } load1c(id); });
     if (p?.rep_id || preset.rep_id) load1c(p?.rep_id || preset.rep_id);
-    f.querySelector('[data-status]').addEventListener('click', (e) => {
-      const b = e.target.closest('button'); if (!b) return;
-      f.querySelector('[name=status]').value = b.dataset.v; A.haptic();
-      f.querySelectorAll('[data-status] button').forEach((x) => x.classList.toggle('on', x === b));
-    });
     async function save(api) {
       const v = (n) => f.querySelector(`[name=${n}]`).value.trim();
       const amount = parseAmount(v('amount'));
@@ -816,7 +814,7 @@
           // по записи на каждую накладную
           let off = false, total = 0, done = 0, err = null;
           for (const d of many) {
-            const one = { ...pk, amount: Number(d.open_amount), invoice_no: d.in_no || null, doc_id: d.id, payout_date: v('payout_date'), status: v('status'), basis: v('basis') || null, comment: v('comment') || null };
+            const one = { ...pk, amount: Number(d.open_amount), invoice_no: d.in_no || null, doc_id: d.id, payout_date: v('payout_date'), basis: v('basis') || null, comment: v('comment') || null };
             try { const r = await write('payouts', 'insert', null, one); off = off || r.offline; }
             catch (e) { err = e; break; }
             done++; total += A.toCents(d.open_amount);
@@ -832,7 +830,7 @@
           preset.after?.();
           return;
         }
-        const row = { ...pk, amount, invoice_no: v('invoice_no') || null, doc_id: v('doc_id') || null, payout_date: v('payout_date'), status: v('status'), basis: v('basis') || null, comment: v('comment') || null };
+        const row = { ...pk, amount, invoice_no: v('invoice_no') || null, doc_id: v('doc_id') || null, payout_date: v('payout_date'), basis: v('basis') || null, comment: v('comment') || null };
         const r = await write('payouts', p ? 'update' : 'insert', p?.id, row);
         st.payouts.sort((a, b) => b.payout_date.localeCompare(a.payout_date));
         api.close(); A.toast('Сохранено' + (r.offline ? ' · отправится при появлении сети' : '')); render();
@@ -954,7 +952,7 @@
   function repExcel(r, ords, pays, docs) {
     const rows = [];
     for (const o of ords) rows.push(['Заказ', o.order_date, o.order_no || '', Number(o.amount), ordView(o).label, o.expected_date || '', o.comment || '']);
-    for (const p of pays) rows.push(['Выплата', p.payout_date, p.invoice_no || '', Number(p.amount), A.payView(p.status).label, p.paid_at ? p.paid_at.slice(0, 10) : '', p.comment || p.basis || '']);
+    for (const p of pays) rows.push(['Выплата', p.payout_date, p.invoice_no || '', Number(p.amount), A.payView(p.status).label, A.isoDay(p.paid_at), p.comment || p.basis || '']);
     for (const d of docs || []) if (!d.deleted) rows.push([docLabel(d), d.at.slice(0, 10), d.in_no || shortNum(d.num), Number(d.inc) || -Number(d.dec),
       d.kind === 'in' ? (Number(d.open) > 0 ? 'Не оплачено ' + A.fmtMoney(d.open) : 'Оплачено') : '', '', d.comment || '']);
     if (!rows.length) return A.toast('Нечего выгружать', true);
@@ -1303,6 +1301,33 @@
       return Array.isArray(items) ? items : null;
     } catch { return null; }
   }
+  const payoutReviews = () => accountId ? readQueue(queueKey(accountId) + ':payout-review') || [] : [];
+  function prepareQueue(items, owner) {
+    const { ready, review } = A.reviewPayoutQueue(items);
+    if (!review.length) return items;
+    const key = queueKey(owner) + ':payout-review', prior = readQueue(key) || [];
+    const byId = new Map([...prior, ...review].map((w) => [w.id, w]));
+    // Сначала сохраняем исходные команды; только после этого убираем неподтверждённый статус.
+    localStorage.setItem(key, JSON.stringify([...byId.values()]));
+    saveQueue(ready, owner);
+    return ready;
+  }
+  function finishPayoutReview(id) {
+    try {
+      localStorage.setItem(queueKey(accountId) + ':payout-review', JSON.stringify(payoutReviews().filter((w) => w.id !== id)));
+      offlineBar();
+    } catch { A.toast('Не удалось сохранить результат проверки на устройстве', true); }
+  }
+  function payoutQueueReview() {
+    const items = payoutReviews();
+    const api = A.sheet({ title: 'Проверить прежние отметки', left: 'Закрыть', body:
+      '<div class="footer-note">Старая версия сохранила отметки без сети. Проверьте фактическую выдачу денег и подтвердите её в записи.</div><div class="list">' +
+      items.map((w) => { const p = st.payouts.find((x) => x.id === w.id); return `<button class="cell action" data-review="${E(w.id)}">${E(p ? repLabel(repById(p.rep_id)) + ' · ' + A.fmtMoney(p.amount) : 'Прежняя запись — проверить после обновления')}</button>`; }).join('') + '</div>' });
+    api.body.querySelectorAll('[data-review]').forEach((b) => b.addEventListener('click', () => {
+      if (!st.payouts.some((p) => p.id === b.dataset.review)) return A.toast('Запись не загружена. Обновите список и проверьте её в истории', true);
+      payoutDetail(b.dataset.review);
+    }));
+  }
   function useAccount(owner) {
     if (owner === accountId) return;
     if (accountId) {
@@ -1317,14 +1342,18 @@
     if (!owner) return;
     const key = queueKey(owner);
     const saved = readQueue(key);
-    if (saved) { queue = saved; return; }
+    if (saved) {
+      try { queue = prepareQueue(saved, owner); }
+      catch { queue = saved; queueBlocked = true; }
+      return;
+    }
     // Старая очередь переносится только при совпадении сохранённой учётной записи.
     try {
       const cache = JSON.parse(localStorage.getItem(CKEY) || 'null');
       const legacy = readQueue(QKEY);
       if (cacheMatches(cache) && legacy?.length) {
         localStorage.setItem(key, JSON.stringify(legacy));
-        queue = legacy;
+        queue = prepareQueue(legacy, owner);
         localStorage.removeItem(QKEY);
       }
     } catch { /* исходная очередь остаётся доступной после освобождения места */ }
@@ -1389,7 +1418,7 @@
   async function write(table, op, id, row = {}) {
     const owner = accountId;
     if (!owner) throw new Error('Войдите в учётную запись');
-    const w = { table, op, id: id || uuid(), row };
+    const w = { table, op, id: id || uuid(), row, queue_version: 2 };
     return withQueue(owner, async () => {
       if (owner !== accountId) throw new Error('Сессия изменилась. Войдите в ту же учётную запись.');
       await flushQueue(owner);
@@ -1416,7 +1445,8 @@
   }
   async function flushQueue(owner) {
     if (owner !== accountId) return 0;
-    queue = readQueue(queueKey(owner)) || queue;
+    try { queue = prepareQueue(readQueue(queueKey(owner)) || queue, owner); }
+    catch { queueBlocked = true; A.toast('Не удалось сохранить прежние отметки. Освободите место на устройстве', true); return 0; }
     let sent = 0;
     while (queue.length && navigator.onLine && owner === accountId) {
       const items = queue;
@@ -1437,7 +1467,10 @@
     if (sent && owner === accountId) A.toast(`Отправлено изменений: ${sent}`);
     return sent;
   }
-  function applyQueue() { for (const w of queue) applyLocal(w, true); }
+  function applyQueue() {
+    // Даже при переполненном хранилище прежняя очередь не изображает неподтверждённую выдачу.
+    for (const w of A.reviewPayoutQueue(queue).ready) applyLocal(w, true);
+  }
   function cacheSave() {
     if (!accountId || st.me?.user_id !== accountId) return;
     try { localStorage.setItem(CKEY, JSON.stringify({ project: sb.auth.storageKey, me: st.me, reps: st.reps, stores: st.stores, orders: st.orders, payouts: st.payouts, access: st.access, repUsers: st.repUsers, staff: st.staff, unrec: st.unrec, open1c: st.open1c, dbMb: st.dbMb })); }
@@ -1455,16 +1488,59 @@
     let bar = $('offline');
     if (!bar) { bar = document.createElement('div'); bar.id = 'offline'; bar.className = 'offline-bar'; document.body.append(bar); }
     const off = !navigator.onLine, n = queue.length;
+    const reviews = payoutReviews().length;
     bar.textContent = off ? (n ? `Нет сети · не отправлено: ${n}. Отправится само` : 'Нет сети · показаны сохранённые данные')
-      : n ? (queueBlocked ? `Не удалось отправить изменений: ${n}` : `Ожидают отправки: ${n}`) : '';
-    bar.classList.toggle('show', !!(st.me && (off || n)));
+      : n ? (queueBlocked ? `Не удалось отправить изменений: ${n}` : `Ожидают отправки: ${n}`) : reviews ? `Проверить прежние отметки выдачи: ${reviews}` : '';
+    bar.onclick = reviews && isAdmin() ? payoutQueueReview : null;
+    bar.classList.toggle('show', !!(st.me && (off || n || reviews)));
   }
   window.addEventListener('online', async () => { offlineBar(); await refresh(true); offlineBar(); });
   window.addEventListener('offline', offlineBar);
 
-  // Смена статуса с кнопкой «Вернуть»
+  // Выдача денег подтверждается только онлайн: неопределённый результат нельзя ставить в очередь.
+  const issuingPayouts = new Set();
+  async function issuePayout(row, paid) {
+    if (issuingPayouts.has(row.id)) return;
+    const owner = accountId, expected = row.updated_at;
+    let requestSent = false;
+    issuingPayouts.add(row.id);
+    try {
+      if (!isAdmin()) throw new Error('Выдачу подтверждает только администратор');
+      if (!navigator.onLine || row._pending || !expected) throw new Error('Для подтверждения выдачи подключитесь к сети и дождитесь сохранения записи');
+      const question = paid
+        ? `Подтвердить передачу денег: ${repLabel(repById(row.rep_id))}, ${A.fmtMoney(row.amount)}? Нажимайте после фактической выдачи.`
+        : `Отменить отметку о выдаче ${A.fmtMoney(row.amount)}: ${repLabel(repById(row.rep_id))}?${row.received_at ? ' Представитель уже подтвердил получение.' : ''} Запись снова будет ожидать выдачи.`;
+      if (!(await confirmAct(question))) return;
+      await withQueue(owner, async () => {
+        await flushQueue(owner);
+        if (queue.length || owner !== accountId) throw new Error('Дождитесь отправки изменений и обновите список');
+        const { data: { session }, error: sessionError } = await sb.auth.getSession();
+        if (sessionError) throw sessionError;
+        if (session?.user.id !== owner || owner !== accountId) throw new Error('Сессия изменилась. Обновите страницу');
+        const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 15000);
+        let result;
+        try {
+          requestSent = true;
+          result = await sb.rpc('set_payout_paid', { p_id: row.id, p_paid: paid, p_expected_updated_at: expected })
+            .setHeader('Authorization', `Bearer ${session.access_token}`).abortSignal(ctl.signal);
+        } finally { clearTimeout(timer); }
+        if (result.error) throw result.error;
+        if (!result.data || result.data.id !== row.id) throw new Error('Сервер не подтвердил изменение. Обновите список');
+        if (owner !== accountId) return;
+        applyServerWrite({ table: 'payouts', id: row.id }, result.data);
+        finishPayoutReview(row.id);
+        cacheSave(); rerender(); A.haptic();
+        A.toast(paid ? 'Деньги выданы' : 'Отметка о выдаче отменена');
+      });
+    } catch (e) {
+      A.toast(requestSent && isNetErr(e) ? 'Ответ о выдаче не получен. Обновите список и проверьте статус перед повторным действием.' : humanError(e), true);
+      if (e.code === '40001' && owner === accountId) await refresh(true);
+    } finally { issuingPayouts.delete(row.id); }
+  }
+  // Статусы заказов допускают очередь и отмену; выдача денег — отдельную защищённую команду.
   async function changeStatus(table, id, status, msg) {
     const row = listOf(table).find((x) => x.id === id); if (!row) return;
+    if (table === 'payouts') return issuePayout(row, status === 'paid');
     const prev = row.status;
     try {
       const r = await write(table, 'update', id, { status });
@@ -1559,8 +1635,8 @@
     }
     const p = st.payouts.find((x) => x.id === cell.dataset.pay);
     if (!p || !isAdmin()) return [];
-    if (p.status === 'paid') return [{ label: 'Не оплачено', color: 'gray', run: () => quickStatus('payouts', p.id, 'to_pay', 'Оплата снята') }];
-    return [{ label: 'Оплачено', color: 'green', run: () => quickStatus('payouts', p.id, 'paid', 'Оплачено') }];
+    if (p.status === 'paid') return [{ label: 'Отменить выдачу', color: 'gray', run: () => quickStatus('payouts', p.id, 'to_pay', 'Отметка о выдаче отменена') }];
+    return [{ label: 'Деньги выданы', color: 'green', run: () => quickStatus('payouts', p.id, 'paid', 'Деньги выданы') }];
   }
   A.swipeRows($('page'), swipeActions);
   // Ветка ИП в списках сворачивается/разворачивается нажатием на заголовок
@@ -1885,7 +1961,7 @@
   // ИСТОРИЯ ИЗМЕНЕНИЙ
   // =====================================================================
   const FIELD = { amount: 'сумма', expected_date: 'приход', order_date: 'дата заказа', order_no: '№', comment: 'комментарий', status: 'статус',
-    payout_date: 'дата выплаты', basis: 'основание', invoice_no: '№ накладной', received_at: 'получено представителем', inc: 'приход', dec: 'расход', deleted: 'удалён в 1С', kontr: 'контрагент', full_name: 'ФИО', company: 'компания', phone: 'телефон', active: 'доступ',
+    payout_date: 'дата выплаты', basis: 'основание', invoice_no: '№ накладной', reserved_amount: 'отложено по РКО', reserved_at: 'дата резерва', paid_by: 'выдал администратор', received_at: 'получено представителем', inc: 'приход', dec: 'расход', deleted: 'удалён в 1С', kontr: 'контрагент', full_name: 'ФИО', company: 'компания', phone: 'телефон', active: 'доступ',
     store_id: 'магазин', rep_id: 'представитель', name: 'название', address: 'адрес', ext_key: 'ключ 1С' };
   function fmtVal(k, v) {
     if (v == null || v === '') return '—';
@@ -2167,13 +2243,13 @@
           const { data, error } = await sb.rpc('finish_import', { p_import: imp, p_scopes: docFiles.map((x) => x.scope).filter((x) => x.from),
             p_files: docFiles.map((x) => ({ name: x.name, kind: x.info.object, rows: x.rows.length })) });
           if (error) throw error;
-          fin = { ...data, orders: 0, payouts_linked: 0, payouts_paid: 0 };
+          fin = { ...data, orders: 0, payouts_linked: 0, payouts_reserved: 0 };
           // сверка пачками по 100 поставщиков — каждый запрос короткий
           const reps = data.reps || [];
           for (let i = 0; i < reps.length; i += 100) {
             say(`Сверка с заказами и записями: ${Math.min(i + 100, reps.length)} из ${reps.length} поставщиков…`);
             const r = await sb.rpc('reconcile', { p_reps: reps.slice(i, i + 100) }); if (r.error) throw r.error;
-            for (const k of ['orders', 'payouts_linked', 'payouts_paid']) fin[k] += r.data[k] || 0;
+            for (const k of ['orders', 'payouts_linked', 'payouts_reserved']) fin[k] += r.data[k] || 0;
           }
         }
       } catch (e) {
@@ -2189,7 +2265,7 @@
             + (fin.deleted ? line('Удалены в 1С (помечены)', n(fin.deleted), 'red') : '')
             + (res.reps_added ? line('Новых поставщиков', n(res.reps_added)) : '')
             + line('Заказов отмечено «Пришёл»', n(fin.orders)) + line('Записей связано с накладными', n(fin.payouts_linked))
-            + line('Записей отмечено «Оплачено» по 1С', n(fin.payouts_paid)) : ''}</div>
+            + line('Записей «Деньги отложены» по расходникам', n(fin.payouts_reserved)) : ''}</div>
         ${fin?.not_deleted?.length ? `<div class="footer-note warn">Похоже, файл неполный (${E(fin.not_deleted.join('; '))}) — отсутствующие документы не помечены удалёнными.</div>` : ''}
         ${reports.length ? btn('registers', 'Открыть отчёты по причинам') : ''}
         ${st.unrec?.n ? `<button class="btn plain" type="button" data-act="unrec">Накладные без записи · ${st.unrec.n}</button>` : ''}`;

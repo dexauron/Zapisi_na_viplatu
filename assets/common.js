@@ -41,9 +41,11 @@
   const fmtMoney = (v) => money.format(Number(v || 0));
   const toCents = (v) => Math.round(Number(v || 0) * 100);
   const sum = (rows) => rows.reduce((a, r) => a + toCents(r.amount), 0) / 100; // в копейках — без ошибок float
-  const today = () => new Date().toLocaleDateString('sv-SE');
-  const addDays = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toLocaleDateString('sv-SE'); };
-  const fmtDate = (d) => (d ? new Date(d.length === 10 ? d + 'T12:00:00' : d).toLocaleDateString('ru-RU') : '');
+  const STORE_TZ = 'Europe/Moscow';
+  const today = () => new Date().toLocaleDateString('sv-SE', { timeZone: STORE_TZ });
+  const isoDay = (d) => !d ? '' : /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : new Date(d).toLocaleDateString('sv-SE', { timeZone: STORE_TZ });
+  const addDays = (iso, n) => { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const fmtDate = (d) => (d ? new Date(isoDay(d) + 'T12:00:00Z').toLocaleDateString('ru-RU', { timeZone: STORE_TZ }) : '');
   const fmtShort = (d) => (d ? new Date(d + 'T12:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '') : '');
   const fmtMonth = (ym) => { const s = new Date(ym + '-01T12:00:00').toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' }); return s[0].toUpperCase() + s.slice(1).replace(' г.', ''); };
   const relDay = (d) => {
@@ -180,12 +182,28 @@
   }
 
   // ---------- статусы ----------
-  // Выплата: «Запись» (ещё не оплачено) или «Оплачено». Старое «Начислено/К выплате» = «Запись».
+  // Расходник подтверждает резерв, фактическую выдачу отдельно подтверждает администратор.
   const PAY = {
     to_pay: { label: 'Запись', c: 'orange' },
-    paid: { label: 'Оплачено', c: 'green' },
+    reserved: { label: 'Деньги отложены', c: 'blue' },
+    paid: { label: 'Деньги выданы', c: 'green' },
   };
-  const payView = (s) => PAY[s === 'paid' ? 'paid' : 'to_pay'];
+  const payView = (s) => Object.hasOwn(PAY, s) ? PAY[s] : PAY.to_pay;
+  // Старые офлайн-отметки нельзя автоматически превратить в подтверждённую выдачу.
+  // Остальные поля сохраняются; исходные команды возвращаются для отдельной ручной проверки.
+  function reviewPayoutQueue(items) {
+    const review = [], ready = [];
+    for (const w of items) {
+      if (w.table === 'payouts' && w.op === 'delete' && w.queue_version !== 2) { review.push(w); continue; }
+      if (w._payoutReviewMigrated || w.table !== 'payouts' || !w.row || !Object.hasOwn(w.row, 'status')) { ready.push(w); continue; }
+      review.push(w);
+      const row = { ...w.row };
+      for (const k of ['status', 'paid_at', 'paid_by', 'received_at', 'reserved_at', 'reserved_amount']) delete row[k];
+      if (w.op === 'insert') row.status = 'to_pay';
+      if (w.op !== 'update' || Object.keys(row).length) ready.push({ ...w, row, _payoutReviewMigrated: true });
+    }
+    return { ready, review };
+  }
   // Номер накладной для людей — входящий номер поставщика. У ручных накладных его нет: «б/н».
   // Внутренний номер 1С (ПФ…) в списках не показывается — только в подробностях документа.
   const docNo = (d) => (d?.in_no ? '№ ' + d.in_no : d?.kind === 'in' ? 'б/н' : '');
@@ -205,7 +223,7 @@
   // Одна короткая фраза о сроке заказа для строки списка
   function orderWhen(o) {
     if (o.status === 'cancelled') return 'отменён';
-    if (o.status === 'delivered') return 'пришёл ' + relDay(o.delivered_at?.slice(0, 10));
+    if (o.status === 'delivered') return 'пришёл ' + relDay(isoDay(o.delivered_at));
     if (!o.expected) return 'без даты прихода';
     const late = Math.round((new Date(today() + 'T12:00:00') - new Date(o.expected + 'T12:00:00')) / 864e5);
     return late > 0 ? `просрочен на ${late} дн.` : 'приход ' + relDay(o.expected);
@@ -546,8 +564,8 @@
     toast('Файл Excel сохранён');
   }
 
-  window.App = { sb, repClient, fmtMoney, toCents, sum, today, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches, rank, mark, canon,
-    PAY, payView, docNo, ORD, dayGroups, monthOrder, orderView, orderWhen, pill, groupBy, toast, sheet, dismissOverlays, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON,
+  window.App = { sb, repClient, fmtMoney, toCents, sum, today, isoDay, addDays, fmtDate, fmtShort, fmtMonth, relDay, esc, initials, matches, rank, mark, canon,
+    PAY, payView, reviewPayoutQueue, docNo, ORD, dayGroups, monthOrder, orderView, orderWhen, pill, groupBy, toast, sheet, dismissOverlays, haptic, swipeRows, pullToRefresh, swipeX, setTheme, getTheme, navScroll, searchBox, bindSearch, emptyState, ICON,
     hue, av, skeleton, docIcon, ageCls, moneyOrDash, setFz, getFz, loadXLSX, toExcel,
     period, periodRange, periodLabel, periodShift, periodBar, bindPeriod, inPeriod };
 })();

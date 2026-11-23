@@ -32,3 +32,10 @@ test('Рабочий обработчик выключен без явной н�
  await assert.rejects(main({}),{code:'GITHUB_STORAGE_DISABLED'});
  const hash=await schemaHash();assert.match(hash,/^[a-f0-9]{64}$/);assert.equal(hash,await schemaHash());
 });
+test('Сквозной тест отказывается подключаться к удалённой базе до загрузки драйвера',()=>{
+ const {spawnSync}=require('node:child_process'),{join}=require('node:path');
+ for(const url of ['postgresql://test:private-value@example.invalid:54322/postgres','postgresql://test@localhost:54322/postgres?host=example.invalid']){
+  const result=spawnSync(process.execPath,[join(__dirname,'github-db.cjs')],{encoding:'utf8',env:{...process.env,DB_URL:url}});
+  assert.notEqual(result.status,0);assert.match(result.stderr,/LOCAL_TEST_DATABASE_REQUIRED/);assert.ok(!result.stderr.includes('private-value'));
+ }
+});

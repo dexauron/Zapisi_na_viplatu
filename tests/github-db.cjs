@@ -1,6 +1,12 @@
 // Настоящий PostgreSQL с существующими миграциями; данные вымышлены, в конце rollback.
 'use strict';
 const assert=require('node:assert/strict');
+// Восстановление использует нетранзакционный setval. Никогда не запускать на удалённой БД.
+if(process.env.DB_URL){
+ let local=false;
+ try{const u=new URL(process.env.DB_URL);local=['postgres:','postgresql:'].includes(u.protocol)&&['127.0.0.1','localhost','[::1]'].includes(u.hostname)&&['54322','55432'].includes(u.port)&&u.pathname==='/postgres'&&!u.search&&!u.hash;}catch{}
+ if(!local)throw new Error('LOCAL_TEST_DATABASE_REQUIRED');
+}
 const {execute}=require('../scripts/github/postgres.cjs');
 const {Client}=require(process.env.PG_MODULE||'pg');
 const {randomUUID,randomBytes}=require('node:crypto');

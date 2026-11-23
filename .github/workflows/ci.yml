@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: 22
       - name: Синтаксис JS
-        run: for f in assets/*.js; do node --check "$f"; done
+        run: for f in assets/*.js assets/github/*.js assets/github/*.cjs scripts/github/*.cjs; do node --check "$f"; done
       - name: Разбор 1С, статусы выплат, даты и очередь
         run: node --test tests/*.test.cjs
       - name: Зависимости проверок экранов
@@ -61,6 +61,15 @@ jobs:
         run: supabase start -x gotrue,realtime,imgproxy,kong,mailpit,postgrest,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
       - name: RLS на всех таблицах и тесты прав
         run: supabase/tests/run.sh
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Зависимости обработчика GitHub
+        run: npm ci --prefix tests --ignore-scripts
+      - name: Подписанные команды и восстановление шифрованной базы
+        env:
+          DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: node tests/github-db.cjs
 
   functions:
     name: Серверные функции — типы и линтер

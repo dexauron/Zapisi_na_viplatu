@@ -48,7 +48,8 @@ async function rpc(db,role,profile,operation){
  const sqlArgs=names.map((name,i)=>{const type=spec.types[spec.proargnames.indexOf(name)];let value=args[name];
   if(value!==null&&/^(json|jsonb)$/.test(type))value=JSON.stringify(value);
   values.push(value);return ident(name)+' => $'+(i+1)+'::'+type;});
- const result=await db.query('select public.'+ident(operation.name)+'('+sqlArgs.join(',')+') as result',values);
+ // Включая скалярный timestamptz подтверждения ТП: не пропускать его через JS Date.
+ const result=await db.query('select to_json(public.'+ident(operation.name)+'('+sqlArgs.join(',')+')) as result',values);
  return result.rows[0]?.result??null;
 }
 async function table(db,role,operation){

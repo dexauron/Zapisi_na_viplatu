@@ -15,6 +15,8 @@ const meta=(store,audience,revision)=>({store,audience,revision});
 async function layout(db){
  const publicTables=(await db.query("select tablename from pg_tables where schemaname='public' order by tablename")).rows.map(r=>'public.'+r.tablename);
  if(S.canonical(publicTables)!==S.canonical(TABLES.filter(t=>t.startsWith('public.')).sort()))throw P.error('UNSUPPORTED_SCHEMA');
+ const privateTables=(await db.query("select tablename from pg_tables where schemaname='private' order by tablename")).rows.map(r=>'private.'+r.tablename);
+ if(S.canonical(privateTables)!==S.canonical(TABLES.filter(t=>t.startsWith('private.')).sort()))throw P.error('UNSUPPORTED_SCHEMA');
  const out=[];
  for(const table of TABLES){
   const [schema,name]=table.split('.');
@@ -83,7 +85,8 @@ async function restoreDatabase(db,snapshot){
  if(S.canonical(snapshot.spec)!==S.canonical(await layout(db)))throw P.error('SCHEMA_MISMATCH');
  // Только доверенное временное окружение. Иначе сработали бы триггеры выдачи/аудита.
  await db.query('set local session_replication_role=replica');
- await db.query('truncate '+TABLES.map(relation).join(',')+' restart identity cascade');
+ // Не сбрасывать чужие счётчики служебного Auth при CASCADE. Наш audit восстанавливаем явно.
+ await db.query('truncate '+TABLES.map(relation).join(',')+' continue identity cascade');
  for(const s of snapshot.spec){
   for(let i=0;i<BUCKETS;i++){
    const id=s.table.replace('.','_')+'_'+String(i).padStart(2,'0'),chunk=snapshot.chunks.find(c=>c.id===id);

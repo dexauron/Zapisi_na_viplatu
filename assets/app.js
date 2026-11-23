@@ -197,6 +197,7 @@
       await signOutClean('Нет доступа: учётная запись не активна'); return false;
     }
     st.me = d.me;
+    resetRange(); invoiceSearchCache.clear();
     st.reps = sortRu(d.reps || [], 'full_name'); st.stores = sortRu(d.stores || [], 'name');
     st.orders = d.orders || []; st.staff = sortRu(d.staff || [], 'full_name');
     st.payouts = d.payouts || []; st.access = d.access || []; st.repUsers = d.rep_users || [];
@@ -215,7 +216,7 @@
   // ---------- оболочка ----------
   function renderTabs() {
     $('tabs').innerHTML = TABS.filter((t) => !t.top && (!t.admin || isAdmin())).map((t) =>
-      `<button data-tab="${t.id}" class="${st.tab === t.id ? 'on' : ''}">${t.icon}<span>${t.label}</span>${t.id === 'today' && badgeCount() ? `<em class="tab-badge">${badgeCount()}</em>` : ''}</button>`).join('');
+      `<button type="button" data-tab="${t.id}" ${st.tab === t.id ? 'aria-current="page"' : ''} ${t.id === 'dir' ? 'aria-label="Представители"' : ''} class="${st.tab === t.id ? 'on' : ''}">${t.icon}<span>${t.id === 'dir' ? '<span class="tab-long">Представители</span><span class="tab-short" aria-hidden="true">Торговые</span>' : t.label}</span>${t.id === 'today' && badgeCount() ? `<em class="tab-badge">${badgeCount()}</em>` : ''}</button>`).join('');
     const n = badgeCount();
     try { n ? navigator.setAppBadge?.(n) : navigator.clearAppBadge?.(); } catch { /* значок на иконке поддерживается не везде */ }
   }
@@ -232,53 +233,72 @@
   $('nav-more').addEventListener('click', () => { if (st.tab === 'more') return; A.haptic(); st.back = st.tab; openTab('more'); });
   $('nav-left').addEventListener('click', () => { if (st.tab !== 'more') return; A.haptic(); openTab(st.back || 'today'); });
   A.navScroll($('nav'));
-  $('nav-plus').addEventListener('click', () => {
+  function createForTab() {
     if (st.tab === 'orders' || st.tab === 'today') orderForm(null, st.tab === 'today' && st.seg.today === 'cal' && st.cal?.day > A.today() ? { expected_date: st.cal.day } : {});
     else if (st.tab === 'payouts') payoutForm();
     else if (st.tab === 'dir') repForm();
-    else if (st.tab === 'more' && isAdmin()) staffForm();
-  });
+  }
 
   function render() {
     const t = TABS.find((x) => x.id === st.tab);
     $('nav-title').textContent = t.label;
-    $('nav-plus').style.visibility = (st.tab === 'more' && !isAdmin()) || st.tab === 'sum' || (st.tab === 'today' && st.seg.today !== 'cal') ? 'hidden' : 'visible';
     $('nav-more').style.visibility = st.tab === 'more' ? 'hidden' : 'visible';
     $('nav-left').textContent = st.tab === 'more' ? '\u2039 Назад' : '';
+    $('nav-left').classList.toggle('hidden', st.tab !== 'more');
     ({ today: renderToday, orders: renderOrders, payouts: renderPayouts, sum: renderSummary, dir: renderDir, more: renderMore })[st.tab]();
     renderTabs();
   }
   // Каркас вкладки: заголовок, сегменты, поиск; список перерисовывается отдельно, чтобы поиск не терял фокус
   function frame(title, segs, segKey, searchPh) {
-    $('page').innerHTML = `<div class="large-title">${E(title)}</div>
+    const createLabel = { orders: 'Новый заказ', payouts: 'Записать выплату', dir: 'Добавить представителя' }[st.tab]
+      || (st.tab === 'today' && st.seg.today === 'cal' ? 'Новый заказ' : '');
+    const description = { today: A.fmtDate(A.today()), orders: 'Поставки и ожидаемые визиты', payouts: 'От записи до передачи денег', dir: 'Торговые представители и их компании', sum: 'Документы и взаиморасчёты' }[st.tab];
+    $('page').innerHTML = `<div class="view-head"><div><h1 class="large-title">${E(title)}</h1>${description ? `<div class="subtitle">${E(description)}</div>` : ''}</div>
+      ${createLabel ? `<button class="btn blue view-create" type="button" id="view-create"><span aria-hidden="true">＋</span>${E(createLabel)}</button>` : ''}</div>
       ${segs ? `<div class="segmented" id="seg">${segs.map(([k, l]) => `<button data-k="${k}" class="${st.seg[segKey] === k ? 'on' : ''}">${E(l)}</button>`).join('')}</div>` : ''}
       ${searchPh ? A.searchBox('q', searchPh) : ''}<div id="body"></div>`;
     if (segs) $('seg').addEventListener('click', (e) => { const k = e.target.closest('button')?.dataset.k; if (k) { st.seg[segKey] = k; render(); } });
     if (searchPh) { $('q').value = st.q[segKey] || ''; $('q').parentElement.querySelector('.clear').classList.toggle('hidden', !$('q').value);
-      A.bindSearch($('q'), () => { st.q[segKey] = $('q').value; render.body(); }); }
+      A.bindSearch($('q'), () => {
+        const next = $('q').value;
+        if (next.trim() && !(st.q[segKey] || '').trim() && ['orders', 'payouts'].includes(segKey)) st.seg[segKey] = 'all';
+        st.q[segKey] = next; render.body();
+      }); }
+    $('view-create')?.addEventListener('click', createForTab);
   }
   const setBody = (html) => { $('body').innerHTML = html; };
   // Периоды по умолчанию: заказы — неделя, выплаты — месяц, 1С — месяц, история — неделя
   st.per = { orders: A.period('week'), payouts: A.period('month'), one: A.period('month'), hist: A.period('week') };
   // При старте загружены последние 90 дней. Давний период (или поиск по всем датам) — дозагрузить с сервера и перерисовать
-  let loadedFrom = A.addDays(A.today(), -90), loadingFrom = null;
-  async function withRange(p, redraw) {
-    const r = A.periodRange(p), from = r ? r.from : '2000-01-01';
+  const HISTORY_START = '0001-01-01';
+  let loadedFrom = A.addDays(A.today(), -90), loadingFrom = null, rangeEpoch = 0, rangeFailed = false;
+  async function withRange(p) {
+    const r = A.periodRange(p), from = r ? r.from : HISTORY_START;
     if (from >= loadedFrom || !navigator.onLine || (loadingFrom && loadingFrom <= from)) return;
-    loadingFrom = from;
+    const owner = accountId, epoch = rangeEpoch, before = loadedFrom;
+    loadingFrom = from; rangeFailed = false; updateSearchScope();
     try {
       const page = async (table, col) => {
         const out = [];
         for (let i = 0; ; i += 1000) {
-          const { data, error } = await sb.from(table).select('*').gte(col, from).lt(col, loadedFrom).order(col).range(i, i + 999);
+          const { data, error } = await sb.from(table).select('*').gte(col, from).lt(col, before).order(col).order('id').range(i, i + 999);
           if (error) throw error; out.push(...data); if (data.length < 1000) return out;
         }
       };
       const [o, p2] = await Promise.all([page('orders', 'order_date'), isAdmin() ? page('payouts', 'payout_date') : []]);
-      mergeRows(st.orders, o); mergeRows(st.payouts, p2); loadedFrom = from;
-      redraw();
-    } catch (e) { if (!isNetErr(e)) A.toast(humanError(e), true); } finally { loadingFrom = null; }
+      if (owner !== accountId || epoch !== rangeEpoch) return;
+      mergeRows(st.orders, o); mergeRows(st.payouts, p2); loadedFrom = from < loadedFrom ? from : loadedFrom;
+      cacheSave(); rerender();
+    } catch (e) { if (owner === accountId && epoch === rangeEpoch) { rangeFailed = true; if (!isNetErr(e)) A.toast(humanError(e), true); } }
+    finally { if (epoch === rangeEpoch && loadingFrom === from) { loadingFrom = null; updateSearchScope(); } }
   }
+  function resetRange(from = A.addDays(A.today(), -90)) { rangeEpoch++; loadedFrom = from; loadingFrom = null; rangeFailed = false; }
+  const searchScope = () => !navigator.onLine ? 'Сохранённые данные · без сети' : rangeFailed
+    ? 'Архив не загружен <button type="button" class="text-btn" data-history-retry>Повторить</button>'
+    : loadingFrom ? 'Проверяем прошлые записи…' : loadedFrom > HISTORY_START ? 'Сохранённые записи' : 'По всем датам';
+  const updateSearchScope = () => $('page').querySelectorAll('[data-search-scope]').forEach(el => { el.innerHTML = searchScope(); });
+  const searchSummary = (count) => `<div class="search-summary" role="status"><span>Найдено: <b>${count}</b></span><span data-search-scope>${searchScope()}</span></div>`;
+  $('page').addEventListener('click', e => { if (e.target.closest('[data-history-retry]')) withRange(A.period('all')); });
   // Значение плитки итогов: ноль — прочерком, чтобы глаз цеплялся за непустое
   const statV = (sum) => (Number(sum) ? `<div class="v">${A.fmtMoney(sum)}</div>` : '<div class="v none">—</div>');
 
@@ -320,12 +340,18 @@
   // =====================================================================
   function renderOrders() {
     if (!['wait', 'delivered', 'all'].includes(st.seg.orders)) st.seg.orders = 'wait';
-    frame('Заказы', null, 'orders', 'Имя, № заказа, сумма');
+    frame('Заказы', null, 'orders', 'ФИО, ИП, № или сумма');
     render.body = renderOrdersBody; renderOrdersBody();
   }
-  function orderMatches(o) {
+  function orderFields(o) {
     const r = repById(o.rep_id), s = storeById(o.store_id);
-    return A.matches(st.q.orders, r?.full_name, r?.company, s?.name, o.order_no, o.comment, o.amount, A.fmtMoney(o.amount), A.fmtDate(o.order_date), staffName(o.created_by));
+    return { names: [r?.full_name], companies: [r?.company], numbers: [o.order_no], amounts: [o.amount, o.actual_amount],
+      text: [s?.name, o.comment, staffName(o.created_by)], dates: [o.order_date, A.fmtDate(o.order_date)] };
+  }
+  function payoutFields(p) {
+    const r = repById(p.rep_id);
+    return { names: [r?.full_name], companies: [r?.company], numbers: [p.invoice_no], amounts: [p.amount],
+      text: [p.basis, p.comment, storeById(p.store_id)?.name, A.payView(p.status).label], dates: [p.payout_date, A.fmtDate(p.payout_date)] };
   }
   function renderOrdersBody() {
     const seg = st.seg.orders, t = A.today(), q = (st.q.orders || '').trim(), P = st.per.orders, r = A.periodRange(P);
@@ -333,28 +359,29 @@
     const inView = (o) => !!q || !r || (o.status === 'ordered' ? !o.expected_date || o.expected_date < t || A.inPeriod(P, o.expected_date)
       : A.inPeriod(P, o.status === 'delivered' ? A.isoDay(o.delivered_at) || o.order_date : o.order_date));
     const view = st.orders.filter(inView);
-    const waitAll = view.filter((o) => o.status === 'ordered'), deliv = view.filter((o) => o.status === 'delivered');
+    const matched = A.rank(q, view, orderFields);
+    const waitAll = matched.filter((o) => o.status === 'ordered'), deliv = matched.filter((o) => o.status === 'delivered');
     // плитки итогов — они же фильтр; повторное нажатие — все заказы периода
-    let rows = view.filter(orderMatches);
-    let html = (q ? '' : A.periodBar(P)) + `<div class="stats">
+    let rows = matched;
+    let html = (q ? searchSummary(matched.length) : A.periodBar(P)) + `<div class="stats">
       <button class="stat ${seg === 'wait' ? 'on' : ''}" data-oseg="wait"><div class="k"><span class="dot" style="background:var(--blue)"></span>Ожидается · ${waitAll.length}</div>${statV(A.sum(waitAll))}</button>
       <button class="stat ${seg === 'delivered' ? 'on' : ''}" data-oseg="delivered"><div class="k"><span class="dot" style="background:var(--green)"></span>Пришли · ${deliv.length}</div>${statV(A.sum(deliv))}</button></div>
       ${seg !== 'all' ? `<button class="chip filter-chip" type="button" data-oseg="${seg}">${seg === 'wait' ? 'Только ожидаемые' : 'Только пришедшие'} ✕</button>` : ''}`;
     if (seg === 'wait') {
-      rows = rows.filter((o) => o.status === 'ordered')
-        .sort((a, b) => (a.expected_date || '9999').localeCompare(b.expected_date || '9999'));
-      html += dateSections(rows, (o) => o.expected_date, orderCell, { pastLabel: 'Просрочено', pastRed: true,
+      rows = rows.filter((o) => o.status === 'ordered');
+      if (!q) rows.sort((a, b) => (a.expected_date || '9999').localeCompare(b.expected_date || '9999'));
+      html += q ? `<div class="list search-results">${rows.map(o => orderCell(o)).join('')}</div>` : dateSections(rows, (o) => o.expected_date, orderCell, { pastLabel: 'Просрочено', pastRed: true,
         title: (g) => (g.key === 'none' ? 'Без даты прихода' : null) });
     } else {
       if (seg === 'delivered') rows = rows.filter((o) => o.status === 'delivered');
       const dateOf = seg === 'delivered' ? (o) => A.isoDay(o.delivered_at) || o.order_date : (o) => o.order_date;
-      html += dateSections(rows, dateOf, orderCell, { pastLabel: seg === 'delivered' ? false : 'Прошедшие' });
+      html += q ? `<div class="list search-results">${rows.map(o => orderCell(o)).join('')}</div>` : dateSections(rows, dateOf, orderCell, { pastLabel: seg === 'delivered' ? false : 'Прошедшие' });
     }
     if (!rows.length) html += A.emptyState(q ? 'Ничего не найдено' : seg === 'wait' ? 'Нет ожидаемых заказов' : 'Заказов за период нет',
-      q ? 'Поиск идёт по всем датам' : 'Выберите другой период или нажмите «+»');
+      q ? 'Проверьте ФИО, ИП, номер или сумму' : 'Выберите другой период или нажмите «Новый заказ»');
     setBody(html);
-    A.bindPeriod($('body'), () => st.per.orders, (np) => { st.per.orders = np; renderOrdersBody(); withRange(np, () => st.tab === 'orders' && renderOrdersBody()); });
-    if (q) withRange(A.period('all'), () => st.tab === 'orders' && renderOrdersBody());
+    A.bindPeriod($('body'), () => st.per.orders, (np) => { st.per.orders = np; renderOrdersBody(); withRange(np); });
+    if (q) withRange(A.period('all'));
     $('body').querySelectorAll('[data-oseg]').forEach((b) => b.addEventListener('click', () => {
       A.haptic(); st.seg.orders = st.seg.orders === b.dataset.oseg ? 'all' : b.dataset.oseg; renderOrdersBody();
     }));
@@ -368,8 +395,9 @@
   }
   function orderCell(o, child = false) {
     const r = repById(o.rep_id), v = ordView(o);
-    const when = [A.orderWhen({ status: o.status, expected: o.expected_date, delivered_at: o.delivered_at }), actualNote(o), child ? '' : r?.company].filter(Boolean).join(' · ');
-    return `<button class="cell ${child === true ? 'child' : ''}" data-id="${o.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
+    const when = [o.order_no && '№ ' + o.order_no, A.orderWhen({ status: o.status, expected: o.expected_date, delivered_at: o.delivered_at }), actualNote(o), child ? '' : r?.company].filter(Boolean).join(' · ');
+    const q = st.q[st.tab] || '';
+    return `<button class="cell ${child === true ? 'child' : ''}" data-id="${o.id}"><div class="main"><div class="t"><b>${A.mark(r?.full_name || '—', q)}</b></div>
       <div class="s">${o._pending ? '<span class="pending">● не отправлено</span> ' : ''}${E(when)}</div></div><div class="r"><div class="amt">${A.fmtMoney(o.amount)}</div>${A.pill(v)}</div></button>`;
   }
 
@@ -407,7 +435,7 @@
   const NEW = '__new__';
   const multiStore = () => st.stores.length > 1;
   // Представитель: строка поиска с подсказками, как в поисковике (см. A.rank)
-  const repFields = (r) => [r.full_name, r.company, r.phone];
+  const repFields = (r) => ({ names: [r.full_name], companies: [r.company], phones: [r.phone] });
   function recentReps(n) {
     const seen = new Set(), out = [];
     const rows = [...st.orders, ...st.payouts].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
@@ -568,7 +596,7 @@
   // =====================================================================
   function renderPayouts() {
     if (!['all', 'to_pay', 'reserved', 'paid'].includes(st.seg.payouts)) st.seg.payouts = 'all';
-    frame('Выплаты', null, 'payouts', 'Имя, № накладной, сумма');
+    frame('Выплаты', null, 'payouts', 'ФИО, ИП, № или сумма');
     render.body = renderPayoutsBody; renderPayoutsBody();
   }
   function renderPayoutsBody() {
@@ -579,10 +607,10 @@
     const inView = (p) => !!q0 || !per || (!isPaid(p) && p.payout_date < t0) || A.inPeriod(P, dateOf(p));
     const view = st.payouts.filter(inView);
     // Каждый статус имеет собственный фильтр; резерв остаётся в активных записях по всем датам.
-    const rows = view.filter((p) => (seg === 'all' || (seg === 'to_pay' ? !isPaid(p) : p.status === seg)) && A.matches(st.q.payouts,
-      repById(p.rep_id)?.full_name, repById(p.rep_id)?.company, p.invoice_no, storeById(p.store_id)?.name, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.payout_date), A.payView(p.status).label));
-    const open = view.filter((p) => !isPaid(p)), reserved = view.filter((p) => p.status === 'reserved'), paidM = view.filter(isPaid);
-    let html = (q0 ? '' : A.periodBar(P)) + `<div class="stats">
+    const matched = A.rank(q0, view, payoutFields);
+    const rows = matched.filter((p) => seg === 'all' || (seg === 'to_pay' ? !isPaid(p) : p.status === seg));
+    const open = matched.filter((p) => !isPaid(p)), reserved = matched.filter((p) => p.status === 'reserved'), paidM = matched.filter(isPaid);
+    let html = (q0 ? searchSummary(matched.length) : A.periodBar(P)) + `<div class="stats payout-stats">
       <button class="stat ${seg === 'to_pay' ? 'on' : ''}" data-seg="to_pay"><div class="k"><span class="dot" style="background:var(--orange)"></span>Ожидают выдачи · ${open.length}</div>${statV(A.sum(open))}</button>
       <button class="stat ${seg === 'reserved' ? 'on' : ''}" data-seg="reserved"><div class="k"><span class="dot" style="background:var(--blue)"></span>Деньги отложены · ${reserved.length}</div>${statV(A.sum(reserved.map((p) => ({ amount: p.reserved_amount }))))}</button>
       <button class="stat ${seg === 'paid' ? 'on' : ''}" data-seg="paid"><div class="k"><span class="dot" style="background:var(--green)"></span>Деньги выданы · ${paidM.length}</div>${statV(A.sum(paidM))}</button></div>
@@ -590,16 +618,19 @@
       ${seg !== 'all' ? `<button class="chip filter-chip" type="button" data-seg="${seg}">${E(seg === 'to_pay' ? 'Ожидают выдачи' : A.payView(seg).label)} ✕</button>` : ''}`;
     const t = A.today(), pc = (x, c) => payoutCell(x, undefined, '', c);
     const ahead = rows.filter((p) => dateOf(p) >= t), late = rows.filter((p) => dateOf(p) < t && !isPaid(p)), done = rows.filter((p) => dateOf(p) < t && isPaid(p));
-    html += dateSections(ahead, dateOf, pc, { pastLabel: false });
-    if (late.length) html += `<div class="past-sep"><span>Ожидают выдачи с прошлых дат · ${A.fmtMoney(A.sum(late))}</span></div>` + dateSections(late, dateOf, pc, { pastLabel: false });
-    html += dateSections(done, dateOf, pc, { pastLabel: 'Выдано раньше' });
+    if (q0) html += `<div class="list search-results">${rows.map(p => payoutCell(p)).join('')}</div>`;
+    else {
+      html += dateSections(ahead, dateOf, pc, { pastLabel: false });
+      if (late.length) html += `<div class="past-sep"><span>Ожидают выдачи с прошлых дат · ${A.fmtMoney(A.sum(late))}</span></div>` + dateSections(late, dateOf, pc, { pastLabel: false });
+      html += dateSections(done, dateOf, pc, { pastLabel: 'Выдано раньше' });
+    }
     const q = (st.q.payouts || '').trim();
     if (!rows.length && !q) html += A.emptyState('Выплат за период нет', 'Выберите другой период или нажмите «+»');
     if (rows.length) html += `<button class="btn plain" type="button" id="pay-xls">Выгрузить в Excel · ${rows.length}</button>`;
     if (q) html += '<div id="inv-found"></div>';
     setBody(html);
-    A.bindPeriod($('body'), () => st.per.payouts, (np) => { st.per.payouts = np; renderPayoutsBody(); withRange(np, () => st.tab === 'payouts' && renderPayoutsBody()); });
-    if (q) withRange(A.period('all'), () => st.tab === 'payouts' && renderPayoutsBody());
+    A.bindPeriod($('body'), () => st.per.payouts, (np) => { st.per.payouts = np; renderPayoutsBody(); withRange(np); });
+    if (q) withRange(A.period('all'));
     $('body').querySelectorAll('[data-seg]').forEach((b) => b.addEventListener('click', () => {
       A.haptic(); st.seg.payouts = st.seg.payouts === b.dataset.seg ? 'all' : b.dataset.seg; renderPayoutsBody();
     }));
@@ -609,39 +640,54 @@
       rows.map((p) => { const r = repById(p.rep_id); return [p.payout_date, r?.full_name || '', r?.company || '', p.invoice_no || '', Number(p.amount),
         A.payView(p.status).label, A.isoDay(p.paid_at), A.isoDay(p.received_at), p.basis || '', p.comment || '', Number(p.reserved_amount || 0)]; }),
       [11, 28, 24, 14, 12, 11, 11, 11, 20, 24]));
-    if (q) findInvoices(q, rows.length);
+    if (q) findInvoices(q, rows.length, matched);
   }
-  // Поиск накладной 1С: записать на выплату или подтвердить выдачу по существующей записи
-  let findSeq = 0;
-  async function findInvoices(q, localCount) {
-    const seq = ++findSeq, box = $('inv-found');
+  // В текстовом поиске используется тот же подбор поставщика, что во всех списках.
+  // Сервер проверяет номера и суммы по всему архиву, а не только по незакрытым накладным.
+  let findSeq = 0, findController = null;
+  const invoiceSearchCache = new Map();
+  async function findInvoices(q, localCount, localPays = [], limit = 40) {
+    const seq = ++findSeq, box = $('inv-found'), parsed = A.searchQuery(q);
+    findController?.abort();
     if (!box) return;
+    if (parsed.invalid) { box.innerHTML = localCount ? '' : A.emptyState('Уточните запрос', 'Введите ФИО, ИП, номер накладной или сумму'); return; }
+    if (!navigator.onLine) { box.innerHTML = '<div class="search-notice">Накладные 1С доступны с интернетом. Сейчас поиск работает по сохранённым записям.</div>'; return; }
+    const filter = { query: q, has_text: !!parsed.text,
+      rep_ids: parsed.text ? A.rank(parsed.text, st.reps, repFields).map(r => r.id).slice(0, 5000) : [],
+      terms: parsed.numbers, exclude_ids: [...new Set(localPays.map(p => p.doc_id).filter(Boolean))].slice(0, 5000) };
+    if (filter.has_text && !filter.rep_ids.length) { box.innerHTML = localCount ? '' : A.emptyState('Ничего не найдено', 'Проверьте ФИО, название ИП, номер или сумму'); return; }
+    const cacheKey = JSON.stringify([accountId, filter, limit]), cached = invoiceSearchCache.get(cacheKey);
     box.innerHTML = '<div style="margin-top:18px">' + A.skeleton(2) + '</div>';
-    const { data, error } = await sb.rpc('find_invoices', { p_q: q });
+    findController = new AbortController();
+    let result;
+    try { result = cached && Date.now() - cached.at < 15000 ? { data: cached.data } : await sb.rpc('search_invoices', { p_filter: filter, p_limit: limit }).abortSignal(findController.signal); }
+    catch (error) { result = { error }; }
+    const { data: response, error } = result;
     if (seq !== findSeq || !box.isConnected) return;
-    if (error) { box.innerHTML = isNetErr(error) ? '' : `<div class="footer-note warn">${E(humanError(error))}</div>`; return; }
-    if (!data.length) { box.innerHTML = localCount ? '' : A.emptyState('Ничего не найдено', 'Ни записей, ни накладных 1С с таким номером'); return; }
-    box.innerHTML = `<div class="section-h"><span>Накладные в 1С · ${data.length}</span></div><div class="list">${data.map((d) => {
+    if (error) { box.innerHTML = `<div class="search-notice" role="status">${isNetErr(error) ? 'Не удалось проверить архив накладных. Сохранённые записи показаны выше.' : E(humanError(error))}<button type="button" class="text-btn" id="inv-retry">Повторить</button></div>`; box.querySelector('#inv-retry')?.addEventListener('click', () => findInvoices(q, localCount, localPays, limit)); return; }
+    if (invoiceSearchCache.size >= 20) invoiceSearchCache.delete(invoiceSearchCache.keys().next().value);
+    invoiceSearchCache.set(cacheKey, { at: Date.now(), data: response });
+    const data = response?.items || [], total = response?.total || data.length;
+    if (!data.length) { box.innerHTML = localCount ? '' : A.emptyState('Ничего не найдено', 'Измените ФИО, название ИП, номер или сумму'); return; }
+    box.innerHTML = `<div class="section-h"><span>Накладные 1С</span><span>${data.length < total ? `${data.length} из ${total}` : total}</span></div><div class="list search-results">${data.map((d) => {
       const r = repById(d.rep_id), open = Number(d.open) > 0;
       const state = d.pay_status ? A.payView(d.pay_status) : open ? { label: 'Не оплачено в 1С', c: 'orange' } : { label: 'Оплачено в 1С', c: 'green' };
       // Закрытая по 1С накладная также может ждать фактической выдачи наличных.
-      const acts = d.pay_status === 'paid' ? '' : d.pay_id
-        ? `<button class="chip on-green" data-inv-paid="${d.id}">Деньги выданы</button>`
-        : `<button class="chip" data-inv-rec="${d.id}">Записать</button>`;
-      return `<div class="cell inv" data-inv="${d.id}"><div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
-          <div class="s">${E([A.docNo({ ...d, kind: 'in' }), A.fmtShort(d.at.slice(0, 10)), open ? 'не оплачено ' + A.fmtMoney(d.open) : ''].filter(Boolean).join(' · '))}</div>
+      const acts = d.pay_id ? `<button class="chip" data-inv-open="${d.id}">Открыть запись</button>` : `<button class="chip" data-inv-rec="${d.id}">Записать выплату</button>`;
+      return `<div class="cell inv" data-inv="${d.id}"><div class="main"><div class="t"><b>${A.mark(r?.full_name || '—', q)}</b></div>
+          ${r?.company ? `<div class="s">${A.mark(r.company, q)}</div>` : ''}<div class="s">${A.mark([A.docNo({ ...d, kind: 'in' }), A.fmtShort(d.at.slice(0, 10)), open ? 'не оплачено ' + A.fmtMoney(d.open) : ''].filter(Boolean).join(' · '), q)}</div>
           <div class="inv-acts">${acts}</div></div>
         <div class="r"><div class="amt">${A.fmtMoney(d.inc)}</div>${A.pill(state)}</div></div>`;
-    }).join('')}</div>`;
+    }).join('')}</div>${data.length < total ? limit < 200 ? '<button type="button" class="btn plain" id="inv-more">Показать ещё</button>' : '<div class="footer-note">Уточните запрос, чтобы сузить список накладных.</div>' : ''}`;
     const byId = new Map(data.map((d) => [d.id, d]));
     box.querySelectorAll('[data-inv-rec]').forEach((b) => b.addEventListener('click', () => {
       const d = byId.get(b.dataset.invRec);
       payoutForm(null, { rep_id: d.rep_id, doc_id: d.id, amount: Number(d.open) > 0 ? Number(d.open) : Number(d.inc), invoice_no: d.in_no || '' });
     }));
-    box.querySelectorAll('[data-inv-paid]').forEach((b) => b.addEventListener('click', () => invoicePaid(byId.get(b.dataset.invPaid))));
+    box.querySelectorAll('[data-inv-open]').forEach((b) => b.addEventListener('click', () => openInvoicePayout(byId.get(b.dataset.invOpen))));
+    box.querySelector('#inv-more')?.addEventListener('click', () => findInvoices(q, localCount, localPays, Math.min(200, limit + 40)));
   }
-  // Для фактической выдачи сначала должна существовать отдельная запись на выплату.
-  async function invoicePaid(d) {
+  async function openInvoicePayout(d) {
     if (!d.pay_id) return;
     try {
       if (!st.payouts.some((p) => p.id === d.pay_id)) {
@@ -649,7 +695,7 @@
         if (error) throw error;
         st.payouts.push(data);
       }
-      await changeStatus('payouts', d.pay_id, 'paid', 'Деньги выданы');
+      payoutDetail(d.pay_id);
     } catch (e) { A.toast(humanError(e), true); }
   }
   // Строка выплаты: кружок подтверждает фактическую выдачу; резерв показывается отдельной подписью
@@ -661,8 +707,8 @@
     if (sub === undefined) sub = [paid ? 'выдано ' + A.fmtShort(A.isoDay(p.paid_at) || p.payout_date) : A.fmtShort(p.payout_date), payNote(p), child ? '' : r?.company].filter(Boolean).join(' · ');
     return `<button class="cell pay ${paid ? 'paid' : ''} ${child ? 'child' : ''}" data-pay="${p.id}">
       ${isAdmin() ? `<span class="tick" data-tick role="checkbox" aria-checked="${paid}" aria-label="${paid ? 'Отменить выдачу' : 'Деньги выданы'}"></span>` : ''}
-      <div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
-      <div class="s">${p._pending ? '<span class="pending">● не отправлено</span> ' : ''}${E(sub ?? [A.fmtShort(p.payout_date), payNote(p)].filter(Boolean).join(' · '))}${paid && p.received_at ? ' · <span class="got">получил ✓</span>' : ''}${warn ? ` <span class="warn">${E(warn)}</span>` : ''}</div></div>
+      <div class="main"><div class="t"><b>${A.mark(r?.full_name || '—', st.q[st.tab] || '')}</b></div>
+      <div class="s">${p._pending ? '<span class="pending">● не отправлено</span> ' : ''}${A.mark(sub ?? [A.fmtShort(p.payout_date), payNote(p)].filter(Boolean).join(' · '), st.q[st.tab] || '')}${paid && p.received_at ? ' · <span class="got">получил ✓</span>' : ''}${warn ? ` <span class="warn">${E(warn)}</span>` : ''}</div></div>
       <div class="r"><div class="amt">${A.fmtMoney(p.amount)}</div>${A.pill(A.payView(p.status))}</div></button>`;
   }
   async function togglePaid(id, cell) {
@@ -845,7 +891,7 @@
   // =====================================================================
   function renderDir() {
     st.seg.dir = 'reps';
-    frame('Представители', null, 'dir', 'Имя, компания, телефон');
+    frame('Представители', null, 'dir', 'ФИО, ИП или телефон');
     render.body = renderDirBody; renderDirBody();
   }
   // Компания или ИП → её торговые (как дерево). Ключ — название без регистра, точек и пробелов.
@@ -1330,6 +1376,7 @@
   }
   function useAccount(owner) {
     if (owner === accountId) return;
+    resetRange(); findController?.abort(); findSeq++; invoiceSearchCache.clear();
     if (accountId) {
       A.dismissOverlays();
       $('page').textContent = '';
@@ -1473,14 +1520,16 @@
   }
   function cacheSave() {
     if (!accountId || st.me?.user_id !== accountId) return;
-    try { localStorage.setItem(CKEY, JSON.stringify({ project: sb.auth.storageKey, me: st.me, reps: st.reps, stores: st.stores, orders: st.orders, payouts: st.payouts, access: st.access, repUsers: st.repUsers, staff: st.staff, unrec: st.unrec, open1c: st.open1c, dbMb: st.dbMb })); }
+    try { localStorage.setItem(CKEY, JSON.stringify({ project: sb.auth.storageKey, historyFrom: loadedFrom, me: st.me, reps: st.reps, stores: st.stores, orders: st.orders, payouts: st.payouts, access: st.access, repUsers: st.repUsers, staff: st.staff, unrec: st.unrec, open1c: st.open1c, dbMb: st.dbMb })); }
     catch { /* мало места — без кэша */ }
   }
   function cacheLoad() {
     try {
       const c = JSON.parse(localStorage.getItem(CKEY) || 'null');
       if (!cacheMatches(c)) return false;
-      Object.assign(st, c); return true;
+      Object.assign(st, c);
+      resetRange(typeof c.historyFrom === 'string' && (c.historyFrom === HISTORY_START || /^\d{4}-\d\d-\d\d$/.test(c.historyFrom)) && c.historyFrom <= A.today() ? c.historyFrom : undefined);
+      return true;
     } catch { return false; }
   }
   // Полоска «нет сети»
@@ -1746,15 +1795,17 @@
     const qs = !!(st.q.sum || '').trim(); if (qs !== drawOneList.qs) { drawOneList.qs = qs; drawOneTop(); }
     const box = $('one-list'); if (!box || !st.one.rows) return;
     const all = st.one.rows, norec = all.filter((d) => !d.rec), rows = oneRows(), q = (st.q.sum || '').trim(), { view, limit } = st.one;
+    const docFields = d => { const r = repById(d.rep_id); return { names: [r?.full_name], companies: [r?.company], numbers: [d.in_no, d.num], amounts: [d.open, d.inc], dates: [d.at?.slice(0, 10)] }; };
+    const matchedRows = A.rank(q, rows, docFields);
     let html = `<div class="section-h"><span>Не оплачено</span><span>${A.fmtMoney(openSum(rows))}</span></div>
       <div class="segmented" data-g="flt">${[['all', `Все · ${all.length}`], ['norec', `Без записи · ${norec.length}`]]
         .map(([k, l]) => `<button data-f="${k}" class="${st.one.flt === k ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div class="segmented" data-g="view" style="margin-top:-4px">${[['reps', 'По поставщикам'], ['docs', 'По накладным']]
         .map(([k, l]) => `<button data-v="${k}" class="${view === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
     if (view === 'reps') {
-      const groups = [...A.groupBy(rows, (d) => d.rep_id).entries()].map(([rid, items]) => ({ rid, items, sum: openSum(items), first: items[0] }))
-        .sort((a, b) => b.sum - a.sum);
-      const list = q ? A.rank(q, groups, (g) => { const r = repById(g.rid); return [r?.full_name, r?.company]; }) : groups;
+      const groups = [...A.groupBy(matchedRows, (d) => d.rep_id).entries()].map(([rid, items]) => ({ rid, items, sum: openSum(items), first: items[0] }));
+      if (!q) groups.sort((a, b) => b.sum - a.sum);
+      const list = groups;
       const mx = Math.max(1, ...groups.slice(0, 1).map((g) => g.sum));
       const supRow = (g, child) => {
         const r = repById(g.rid), dd = daysSince(g.first.at);
@@ -1774,7 +1825,7 @@
       html += list.length ? `<div class="list">${q ? items.map((x) => supRow(x.g, false)).join('') : treeList(items, (x, c) => supRow(x.g, c), true)}</div>` : A.emptyState('Ничего не найдено');
       if (list.length > limit) html += '<button class="btn plain" type="button" data-more>Показать ещё</button>';
     } else {
-      const list = q ? A.rank(q, rows, (d) => { const r = repById(d.rep_id); return [r?.full_name, r?.company, d.in_no, d.open]; }) : rows;
+      const list = matchedRows;
       html += list.length ? `<div class="list">${list.slice(0, limit).map((d) => {
         const r = repById(d.rep_id), dd = daysSince(d.at);
         return `<button class="cell" data-rep="${d.rep_id}">${A.docIcon('in')}<div class="main"><div class="t"><b>${E(r?.full_name || '—')}</b></div>
@@ -1830,28 +1881,34 @@
   const weekday = (d) => { const x = new Date(d + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' }); return x[0].toUpperCase() + x.slice(1); };
 
   function renderToday() {
-    frame('Сегодня', [['today', 'Список'], ['cal', 'Календарь']], 'today', isAdmin() ? 'Имя, № накладной, сумма' : 'Имя, № заказа, сумма');
+    frame('Сегодня', [['today', 'Список'], ['cal', 'Календарь']], 'today', 'ФИО, ИП, № или сумма');
     render.body = () => ((st.q.today || '').trim() ? renderTodaySearch() : st.seg.today === 'cal' ? renderCalendar() : renderTodayBody());
     render.body();
   }
   // Один поиск на «Сегодня»: поставщики, записи на выплату, заказы и накладные 1С
   function renderTodaySearch() {
     const q = st.q.today.trim(), w = waitingMap();
-    const reps = A.rank(q, st.reps.filter((r) => r.active), repFields).slice(0, 8);
-    const pays = isAdmin() ? st.payouts.filter((p) => { const r = repById(p.rep_id);
-      return A.matches(q, r?.full_name, r?.company, p.invoice_no, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.payout_date)); }).slice(0, 15) : [];
-    const ords = st.orders.filter((o) => { const r = repById(o.rep_id);
-      return A.matches(q, r?.full_name, r?.company, o.order_no, o.comment, o.amount, A.fmtMoney(o.amount), A.fmtDate(o.order_date)); }).slice(0, 15);
-    let html = '';
-    if (reps.length) html += `<div class="section-h"><span>Поставщики</span></div><div class="list">${reps.map((r) => repCell(r, false, w)).join('')}</div>`;
-    if (pays.length) html += `<div class="section-h"><span>Записи на выплату</span></div><div class="list">${pays.map((p) => payoutCell(p)).join('')}</div>`;
-    if (ords.length) html += `<div class="section-h"><span>Заказы</span></div><div class="list">${ords.map(orderCell).join('')}</div>`;
+    const allReps = A.rank(q, st.reps.filter((r) => r.active), repFields);
+    const allPays = isAdmin() ? A.rank(q, st.payouts, payoutFields) : [];
+    const allOrders = A.rank(q, st.orders, orderFields);
+    const reps = allReps.slice(0, 8), pays = allPays.slice(0, 15), ords = allOrders.slice(0, 15);
+    const more = (key, total, shown) => total > shown ? `<button type="button" class="btn plain search-more" data-search-more="${key}">Показать все · ${total}</button>` : '';
+    let html = searchSummary(allReps.length + allPays.length + allOrders.length);
+    if (reps.length) html += `<div class="section-h"><span>Представители</span><span>${allReps.length}</span></div><div class="list search-results">${reps.map((r) => repCell(r, false, w)).join('')}</div>${more('dir', allReps.length, reps.length)}`;
+    if (pays.length) html += `<div class="section-h"><span>Записи на выплату</span><span>${allPays.length}</span></div><div class="list search-results">${pays.map((p) => payoutCell(p)).join('')}</div>${more('payouts', allPays.length, pays.length)}`;
+    if (ords.length) html += `<div class="section-h"><span>Заказы</span><span>${allOrders.length}</span></div><div class="list search-results">${ords.map(o => orderCell(o)).join('')}</div>${more('orders', allOrders.length, ords.length)}`;
     const local = reps.length + pays.length + ords.length;
     if (isAdmin()) html += '<div id="inv-found"></div>';
     else if (!local) html = A.emptyState('Ничего не найдено', 'Измените запрос');
     setBody(html); bindCells($('body'));
     $('body').querySelectorAll('[data-rep]').forEach((c) => c.addEventListener('click', () => repDetail(c.dataset.rep)));
-    if (isAdmin()) findInvoices(q, local);
+    $('body').querySelectorAll('[data-search-more]').forEach(b => b.addEventListener('click', () => {
+      const key = b.dataset.searchMore; st.q[key] = q;
+      if (key === 'orders' || key === 'payouts') st.seg[key] = 'all';
+      openTab(key);
+    }));
+    if (isAdmin()) findInvoices(q, local, allPays);
+    withRange(A.period('all'));
   }
   function quickActions() {
     const b = (k, ic, l) => `<button class="qbtn" data-q="${k}"><span class="qi">${QI[ic]}</span><span>${l}</span></button>`;

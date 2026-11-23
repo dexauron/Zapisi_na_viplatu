@@ -120,7 +120,10 @@
     $('seg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
     render();
   });
-  A.bindSearch($('q'), () => { st.q = $('q').value; render(); });
+  A.bindSearch($('q'), () => { const next = $('q').value; if (next.trim() && !st.q.trim()) st.filter = null; st.q = next; render(); });
+  const orderFields = o => ({ numbers: [o.order_no], amounts: [o.amount, o.actual], text: [o.store, o.comment, o.view.label], dates: [o.date, A.fmtDate(o.date)] });
+  const payoutFields = p => ({ numbers: [p.invoice_no], amounts: [p.amount], text: [p.store, p.basis, p.comment, A.payView(p.status).label], dates: [p.date, A.fmtDate(p.date), A.fmtDate(p.paid_at)] });
+  const docFields = d => ({ numbers: [d.num, shortNum(d.num), d.in_no], amounts: [d.amount, d.open], text: [DOC[d.kind] || d.title], dates: [d.date, A.fmtDate(d.date)] });
   function renderPer() {
     $('per').innerHTML = st.q.trim() ? '' : A.periodBar(st.per);
     A.bindPeriod($('per'), () => st.per, (np) => { st.per = np; st.filter = null; render(); });
@@ -128,7 +131,7 @@
 
   function statsDef() {
     if (st.tab === 'orders') {
-      const os = vOrders(), by = (k) => os.filter((o) => (k === 'wait' ? o.status === 'ordered' : o.view.key === k));
+      const os = A.rank(st.q, vOrders(), orderFields), by = (k) => os.filter((o) => (k === 'wait' ? o.status === 'ordered' : o.view.key === k));
       return [
         ['wait', 'Ожидается', 'blue', by('wait')],
         ['late', 'Просрочено', 'red', by('late')],
@@ -137,7 +140,7 @@
       ];
     }
     if (st.tab === 'docs') {
-      const ds = vDocs();
+      const ds = A.rank(st.q, vDocs(), docFields);
       return [
         ['in', 'Приход', 'blue', ds.filter((d) => d.kind === 'in')],
         ['pay', 'Оплаты по 1С', 'green', ds.filter((d) => d.kind === 'pay')],
@@ -145,7 +148,7 @@
         ...(data.debt != null ? [[null, 'Долг по 1С', 'gray', [], Math.max(0, Number(data.debt))]] : []),
       ];
     }
-    const ps = vPayouts();
+    const ps = A.rank(st.q, vPayouts(), payoutFields);
     return [
       ['to_pay', 'Ожидают выдачи', 'orange', ps.filter((p) => p.status !== 'paid')],
       ['reserved', 'Деньги отложены', 'blue', ps.filter((p) => p.status === 'reserved'), A.sum(ps.filter((p) => p.status === 'reserved').map((p) => ({ amount: p.reserved_amount })))],
@@ -164,14 +167,12 @@
 
   function rowsNow() {
     if (st.tab === 'orders') {
-      return vOrders().filter((o) => (!st.filter || (st.filter === 'wait' ? o.status === 'ordered' : o.view.key === st.filter))
-        && A.matches(st.q, o.store, o.order_no, o.comment, o.amount, A.fmtMoney(o.amount), A.fmtDate(o.date), o.view.label));
+      return A.rank(st.q, vOrders(), orderFields).filter((o) => !st.filter || (st.filter === 'wait' ? o.status === 'ordered' : o.view.key === st.filter));
     }
     if (st.tab === 'docs') {
-      return vDocs().filter((d) => (!st.filter || d.kind === st.filter) && A.matches(st.q, d.num, shortNum(d.num), d.in_no, DOC[d.kind] || d.title, d.amount, A.fmtMoney(d.amount), A.fmtDate(d.date)));
+      return A.rank(st.q, vDocs(), docFields).filter(d => !st.filter || d.kind === st.filter);
     }
-    return vPayouts().filter((p) => (!st.filter || (st.filter === 'to_pay' ? p.status !== 'paid' : p.status === st.filter))
-      && A.matches(st.q, p.invoice_no, p.store, p.basis, p.comment, p.amount, A.fmtMoney(p.amount), A.fmtDate(p.date), A.fmtDate(p.paid_at), A.payView(p.status).label))
+    return A.rank(st.q, vPayouts(), payoutFields).filter((p) => !st.filter || (st.filter === 'to_pay' ? p.status !== 'paid' : p.status === st.filter))
       .map((p) => ({ ...p, date: p.status === 'paid' ? A.isoDay(p.paid_at) || p.date : p.date }));
   }
 
@@ -179,13 +180,13 @@
     const rows = rowsNow();
     const actBtn = st.tab === 'docs' && window.Act && docs.some((d) => d.inc != null) ? '<button class="btn plain" type="button" id="act" style="margin:0 0 4px">Акт сверки · PDF</button>' : '';
     if (!rows.length) { $('list').innerHTML = actBtn + A.emptyState(st.q ? 'Ничего не найдено' : 'За период записей нет', st.q ? 'Поиск идёт по всем датам' : 'Выберите другой период'); $('act')?.addEventListener('click', openAct); return; }
-    let html = actBtn;
+    let html = actBtn + (st.q.trim() ? `<div class="search-summary" role="status">Найдено: <b>${rows.length}</b><span>По всем датам</span></div>` : '');
     // сегодня/текущий месяц — первыми, затем будущие, прошедшие — в конце (новые сверху)
     const t = A.today(), rk = (d) => (d === t ? 0 : d > t ? 1 : 2);
     const byDay = (a, b) => rk(a.date.slice(0, 10)) - rk(b.date.slice(0, 10)) || (rk(a.date.slice(0, 10)) === 1 ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date));
-    const months = [...A.groupBy([...rows].sort(byDay), (r) => r.date.slice(0, 7))].sort((a, b) => A.monthOrder(a[0], b[0]));
+    const months = st.q.trim() ? [[null, rows]] : [...A.groupBy([...rows].sort(byDay), (r) => r.date.slice(0, 7))].sort((a, b) => A.monthOrder(a[0], b[0]));
     for (const [ym, items] of months) {
-      html += `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items))}</span></div><div class="list">`;
+      html += (ym ? `<div class="section-h"><span>${A.fmtMonth(ym)}</span><span>${A.fmtMoney(A.sum(items))}</span></div>` : '') + '<div class="list search-results">';
       for (const r of items) {
         if (st.tab === 'orders') {
           html += cell(r.id, r.store || 'Заказ от ' + A.fmtShort(r.date), [A.orderWhen(r), actual(r)].filter(Boolean).join(' · '), r.amount, r.view);
@@ -205,7 +206,7 @@
     $('act')?.addEventListener('click', openAct);
   }
   const cell = (id, t, s, amount, view, cls = '', icon = '') => `<button class="cell ${cls}" data-id="${id}">${icon}
-    <div class="main"><div class="t"><b>${A.esc(t)}</b></div><div class="s">${A.esc(s)}</div></div>
+    <div class="main"><div class="t"><b>${A.mark(t, st.q)}</b></div><div class="s">${A.mark(s, st.q)}</div></div>
     <div class="r"><div class="amt">${A.fmtMoney(amount)}</div>${A.pill(view)}</div></button>`;
 
   const info = (rows) => `<div class="list">${rows.filter(([, v]) => v).map(([k, v]) =>

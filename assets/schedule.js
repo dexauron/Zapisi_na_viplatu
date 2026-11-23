@@ -29,7 +29,7 @@
   let q = '';
   page.innerHTML = `<div class="large-title">Записи на выплату</div>
     <div class="subtitle">${rows.length ? `${rows.length} ${plural(rows.length)} · ${A.fmtMoney(A.sum(rows))}` : ''}</div>
-    ${A.searchBox('q', 'Имя, компания, № накладной')}<div id="list"></div>`;
+    ${A.searchBox('q', 'ФИО, ИП, № накладной или сумма')}<div id="list"></div>`;
   const $ = (id) => document.getElementById(id);
   A.bindSearch($('q'), () => { q = $('q').value; render(); });
 
@@ -63,9 +63,14 @@
           <div class="r"><div class="amt">${A.fmtMoney(A.sum(x.n.items))}</div></div><span class="chev">›</span></button>${x.n.items.map((r) => row(r, true, past)).join('')}</div>`)).join('');
   }
   function render() {
-    const shown = rows.filter((r) => A.matches(q, r.rep, r.company, r.invoice_no));
+    const shown = A.rank(q, rows, r => ({ names: [r.rep], companies: [r.company], numbers: [r.invoice_no], amounts: [r.amount], dates: [r.date, A.fmtDate(r.date)] }));
     if (!shown.length) { $('list').innerHTML = A.emptyState(q ? 'Никого не нашли' : 'Записей нет', q ? 'Измените запрос' : 'Новые записи появятся здесь'); return; }
-    let html = '', sep = false;
+    let html = q.trim() ? `<div class="search-summary" role="status">Найдено: <b>${shown.length}</b></div>` : '', sep = false;
+    if (q.trim()) {
+      $('list').innerHTML = html + `<div class="list search-results">${shown.map(r => row(r, false, r.date < A.today())).join('')}</div>`;
+      $('list').querySelectorAll('[data-rep]').forEach(c => c.addEventListener('click', () => card(c.dataset.rep)));
+      return;
+    }
     for (const g of A.dayGroups(shown, (r) => r.date)) {
       if (g.past && !sep) { html += '<div class="past-sep"><span>Прошедшие даты</span></div>'; sep = true; }
       html += `<div class="section-h ${g.past ? 'red' : ''} ${g.today ? 'today' : ''}"><span>${A.esc(g.title)}</span><span>${g.items.length}</span></div><div class="list">${tree(g.items, g.past)}</div>`;

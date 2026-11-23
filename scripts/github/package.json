@@ -1,0 +1,5 @@
+{
+  "name": "sverka-github-worker",
+  "private": true,
+  "dependencies": { "pg": "8.23.1" }
+}

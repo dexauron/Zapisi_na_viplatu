@@ -5,6 +5,7 @@
     "test": "node --test *.test.cjs && node ui-payouts.cjs && node ui-search.cjs"
   },
   "devDependencies": {
-    "jsdom": "27.0.1"
+    "jsdom": "27.0.1",
+    "pg": "8.23.1"
   }
 }

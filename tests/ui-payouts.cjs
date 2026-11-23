@@ -27,13 +27,14 @@ const server = http.createServer(async (req, res) => {
   } catch { res.writeHead(404); res.end(); }
 });
 
-async function fixture(base, target, width) {
-  const errors = [], state = { calls: 0, stale: false, accept: false, online: true };
-  const pays = [
+async function fixture(base, target, width, options = {}) {
+  const errors = [], state = { calls: 0, stale: false, accept: false, online: true, ...options.state };
+  const reps = options.reps || [{ id: rep, full_name: 'Тестовый торговый', company: 'Тестовая компания', active: true }];
+  const pays = (options.pays || [
     { id: ids[0], rep_id: rep, amount: 150, status: 'reserved', reserved_amount: 100, reserved_at: '2026-11-01T07:00:00Z', payout_date: '2026-01-01', invoice_no: 'RES-1' },
     { id: ids[1], rep_id: rep, amount: 50, status: 'to_pay', reserved_amount: 0, payout_date: '2026-11-20', invoice_no: 'PLAN-1' },
     { id: ids[2], rep_id: rep, amount: 25, status: 'paid', reserved_amount: 25, payout_date: '2026-11-20', invoice_no: 'DONE-1', paid_at: '2026-11-20T06:00:00Z', paid_by: adm },
-  ].map(p => ({ basis: null, comment: null, received_at: null, paid_at: null, paid_by: null, created_at: '2026-11-01T06:00:00Z', updated_at: '2026-11-20T06:00:00.000001Z', ...p }));
+  ]).map(p => ({ basis: null, comment: null, received_at: null, paid_at: null, paid_by: null, created_at: '2026-11-01T06:00:00Z', updated_at: '2026-11-20T06:00:00.000001Z', ...p }));
   const console = new VirtualConsole();
   console.on('jsdomError', e => errors.push(e.message));
   const dom = await JSDOM.fromURL(base + target, {
@@ -50,13 +51,14 @@ async function fixture(base, target, width) {
       w.fetch = async (input, init = {}) => {
         if (!state.online) throw new TypeError('Failed to fetch');
         const url = new URL(typeof input === 'string' ? input : input.url);
+        if (options.respond) { const response = await options.respond(url, init, state); if (response !== undefined) return response; }
         const rpc = url.pathname.split('/rpc/')[1];
         let body = [];
         if (rpc === 'app_bootstrap') body = { me: { user_id: adm, role: 'admin', active: true, full_name: 'Тестовый администратор' },
-          reps: [{ id: rep, full_name: 'Тестовый торговый', company: 'Тестовая компания', active: true }], stores: [], orders: [], payouts: pays,
+          reps, stores: [], orders: options.orders || [], payouts: pays,
           staff: [{ user_id: adm, full_name: 'Тестовый администратор', role: 'admin', active: true }], access: [], rep_users: [], unrec: { n: 0, sum: 0 }, open1c: { n: 0, sum: 0 } };
-        else if (rpc === 'get_rep_data') body = { rep: { full_name: 'Тестовый торговый', company: 'Тестовая компания' }, shop: 'Тестовый магазин', orders: [], docs: [], debt: 0, payouts: pays.map(p => ({ ...p, date: p.payout_date, store: 'Тестовый магазин' })) };
-        else if (rpc === 'get_payout_schedule') body = pays.filter(p => p.status !== 'paid').map(p => ({ ...p, date: p.payout_date, rep: 'Тестовый торговый', company: 'Тестовая компания' }));
+        else if (rpc === 'get_rep_data') body = { rep: reps[0], shop: 'Тестовый магазин', orders: options.repOrders || [], docs: options.docs || [], debt: 0, payouts: pays.map(p => ({ ...p, date: p.payout_date, store: 'Тестовый магазин' })) };
+        else if (rpc === 'get_payout_schedule') body = pays.filter(p => p.status !== 'paid').map(p => ({ ...p, date: p.payout_date, rep: reps.find(r => r.id === p.rep_id)?.full_name, company: reps.find(r => r.id === p.rep_id)?.company }));
         else if (rpc === 'set_payout_paid') {
           state.calls++;
           if (state.stale) return new Response(JSON.stringify({ code: '40001', message: 'Запись уже изменилась. Обновите список и проверьте сумму' }), { status: 409, headers: { 'Content-Type': 'application/json' } });
@@ -74,7 +76,8 @@ async function fixture(base, target, width) {
   return { dom, doc, state, errors, until, click };
 }
 
-(async () => {
+module.exports = { fixture, server, adm, rep, ids };
+if (require.main === module) (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = 'http://127.0.0.1:' + server.address().port;
   const windows = [];

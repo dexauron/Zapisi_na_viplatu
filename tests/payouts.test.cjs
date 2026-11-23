@@ -14,6 +14,7 @@ function app(now = '2026-11-19T22:30:00Z') {
     localStorage: { getItem: () => null }, document: { documentElement: { dataset: {} } },
     window: { APP_CONFIG: { SUPABASE_URL: 'https://fixture.invalid', SUPABASE_KEY: 'fixture' },
       supabase: { createClient: () => ({}) } } };
+  vm.runInNewContext(readFileSync(require.resolve('../assets/search.js'), 'utf8'), ctx);
   vm.runInNewContext(readFileSync(require.resolve('../assets/common.js'), 'utf8'), ctx);
   return ctx.window.App;
 }

@@ -32,7 +32,9 @@ jobs:
       - name: Зависимости проверок экранов
         run: npm ci --prefix tests --ignore-scripts
       - name: Поведение экранов администратора и представителя
-        run: node tests/ui-payouts.cjs
+        run: |
+          node tests/ui-payouts.cjs
+          node tests/ui-search.cjs
       - name: Все подключённые файлы существуют, ключей в коде нет
         run: |
           for page in index.html app.html list.html; do

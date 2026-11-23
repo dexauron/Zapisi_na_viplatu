@@ -297,7 +297,7 @@
     ? 'Архив не загружен <button type="button" class="text-btn" data-history-retry>Повторить</button>'
     : loadingFrom ? 'Проверяем прошлые записи…' : loadedFrom > HISTORY_START ? 'Сохранённые записи' : 'По всем датам';
   const updateSearchScope = () => $('page').querySelectorAll('[data-search-scope]').forEach(el => { el.innerHTML = searchScope(); });
-  const searchSummary = (count) => `<div class="search-summary" role="status"><span>Найдено: <b>${count}</b></span><span data-search-scope>${searchScope()}</span></div>`;
+  const searchSummary = (count) => `<div class="search-summary" role="status"><span>Найдено: <b data-search-count>${count}</b></span><span data-search-scope>${searchScope()}</span></div>`;
   $('page').addEventListener('click', e => { if (e.target.closest('[data-history-retry]')) withRange(A.period('all')); });
   // Значение плитки итогов: ноль — прочерком, чтобы глаз цеплялся за непустое
   const statV = (sum) => (Number(sum) ? `<div class="v">${A.fmtMoney(sum)}</div>` : '<div class="v none">—</div>');
@@ -668,6 +668,7 @@
     if (invoiceSearchCache.size >= 20) invoiceSearchCache.delete(invoiceSearchCache.keys().next().value);
     invoiceSearchCache.set(cacheKey, { at: Date.now(), data: response });
     const data = response?.items || [], total = response?.total || data.length;
+    const count = $('body').querySelector('[data-search-count]'); if (count) count.textContent = String(localCount + total);
     if (!data.length) { box.innerHTML = localCount ? '' : A.emptyState('Ничего не найдено', 'Измените ФИО, название ИП, номер или сумму'); return; }
     box.innerHTML = `<div class="section-h"><span>Накладные 1С</span><span>${data.length < total ? `${data.length} из ${total}` : total}</span></div><div class="list search-results">${data.map((d) => {
       const r = repById(d.rep_id), open = Number(d.open) > 0;
@@ -1897,7 +1898,7 @@
     if (reps.length) html += `<div class="section-h"><span>Представители</span><span>${allReps.length}</span></div><div class="list search-results">${reps.map((r) => repCell(r, false, w)).join('')}</div>${more('dir', allReps.length, reps.length)}`;
     if (pays.length) html += `<div class="section-h"><span>Записи на выплату</span><span>${allPays.length}</span></div><div class="list search-results">${pays.map((p) => payoutCell(p)).join('')}</div>${more('payouts', allPays.length, pays.length)}`;
     if (ords.length) html += `<div class="section-h"><span>Заказы</span><span>${allOrders.length}</span></div><div class="list search-results">${ords.map(o => orderCell(o)).join('')}</div>${more('orders', allOrders.length, ords.length)}`;
-    const local = reps.length + pays.length + ords.length;
+    const local = allReps.length + allPays.length + allOrders.length;
     if (isAdmin()) html += '<div id="inv-found"></div>';
     else if (!local) html = A.emptyState('Ничего не найдено', 'Измените запрос');
     setBody(html); bindCells($('body'));
